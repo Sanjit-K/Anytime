@@ -26,6 +26,16 @@
     .bar { height:8px; border-radius:8px; background:#202d49; overflow:hidden; margin-top:10px; } .bar > span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--blue),var(--green)); }
     .toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; } button { border:1px solid #3d66a5; color:var(--text); background:#193462; border-radius:9px; padding:9px 12px; cursor:pointer; font-weight:650; font-size:12px; } button:hover { background:#23477f; }
     .footnote { color:var(--muted); font-size:11px; margin-top:14px; line-height:1.5; }
+    .flow-stage { position:relative; min-height:220px; display:grid; grid-template-columns:1fr 1.2fr 1fr; align-items:center; gap:26px; padding:18px 8px 8px; overflow:hidden; }
+    .flow-node { position:relative; z-index:2; text-align:center; padding:18px 12px; border:1px solid #314264; border-radius:18px; background:#101a30; }
+    .flow-icon { font-size:30px; margin-bottom:8px; } .flow-title { font-weight:750; font-size:14px; } .flow-sub { color:var(--muted); font-size:11px; margin-top:5px; line-height:1.4; }
+    .flow-link { position:relative; height:6px; border-radius:8px; background:#263653; }
+    .flow-link::after { content:""; position:absolute; top:-5px; width:16px; height:16px; border-radius:50%; background:var(--amber); box-shadow:0 0 18px var(--amber); animation:flow 2s linear infinite; }
+    .flow-link.reverse::after { background:var(--green); box-shadow:0 0 18px var(--green); animation-direction:reverse; }
+    .flow-link.paused::after { opacity:.15; animation-play-state:paused; }
+    @keyframes flow { from { left:-2%; } to { left:calc(100% - 14px); } }
+    .flow-phase { display:flex; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid #202b45; padding-top:13px; color:var(--muted); font-size:12px; }
+    .phase-label { color:var(--text); font-weight:700; } .phase-detail { text-align:right; }
     @media(max-width:850px){ .grid{grid-template-columns:repeat(2,1fr)} .wide{grid-column:span 2} } @media(max-width:560px){ .shell{padding:18px}.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.full{grid-column:auto} header{align-items:flex-start; flex-direction:column} }
   </style>
 </head>
@@ -35,6 +45,18 @@
       <div class="brand"><div class="mark">S</div><div><h1>ShiftOS</h1><div class="subtitle">Grid-aware AI compute control</div></div></div>
       <div class="status" id="backendStatus">● Demo data · connecting to Spacetime</div>
     </header>
+
+    <div class="card full">
+      <div class="toolbar"><h2>What ShiftOS is doing right now</h2><span class="pill running" id="flowMode">LOW PRICE · CHARGING</span></div>
+      <div class="flow-stage">
+        <div class="flow-node"><div class="flow-icon">⚡</div><div class="flow-title">ERCOT grid</div><div class="flow-sub" id="flowPrice">Current price: $35/MWh</div></div>
+        <div class="flow-link" id="gridBatteryLink"></div>
+        <div class="flow-node"><div class="flow-icon">🔋</div><div class="flow-title">Battery reserve</div><div class="flow-sub" id="flowBattery">Charging to protect the evening peak</div></div>
+        <div></div><div class="flow-link reverse paused" id="batteryWorkloadLink"></div>
+        <div class="flow-node"><div class="flow-icon">◈</div><div class="flow-title">AI workloads</div><div class="flow-sub" id="flowWorkload">Flexible jobs run in this cheap window</div></div>
+      </div>
+      <div class="flow-phase"><span class="phase-label" id="flowDecision">ShiftOS chooses: buy energy now</span><span class="phase-detail" id="flowReason">Keep reserve above 30% · move fine-tuning before the price spike</span></div>
+    </div>
 
     <section class="grid">
       <div class="card"><div class="metric-label">Projected cost today</div><div class="metric" id="cost">$1,284</div><div class="delta" id="savings">▼ 18.4% vs. baseline</div></div>
@@ -60,6 +82,22 @@
     const soc=[52,58,64,70,76,82,78,71,65,60,55,50,45,42,46,52,59,65,61,57,54,52,52,52];
     function draw(id, series, colors, max){ const c=document.getElementById(id), r=c.getBoundingClientRect(), d=devicePixelRatio||1; c.width=r.width*d;c.height=r.height*d; const x=c.getContext('2d');x.scale(d,d);const w=r.width,h=r.height,p=22; x.strokeStyle='#243250';x.lineWidth=1; for(let i=0;i<4;i++){const y=p+(h-p*2)*i/3;x.beginPath();x.moveTo(p,y);x.lineTo(w-p,y);x.stroke()} series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=2.5;x.beginPath();arr.forEach((v,i)=>{const xx=p+(w-p*2)*i/(arr.length-1), yy=h-p-(v/max)*(h-p*2);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke()}) }
     function render(){draw('priceChart',[prices,load.map(v=>v/8)],['#f7c873','#70a7ff'],160);draw('batteryChart',[soc],['#5ee6a8'],100)}
+    let expensive=false;
+    function animateEnergyFlow(){
+      expensive=!expensive;
+      const mode=document.getElementById('flowMode');
+      const link=document.getElementById('gridBatteryLink');
+      const workLink=document.getElementById('batteryWorkloadLink');
+      mode.textContent=expensive?'HIGH PRICE · DISCHARGING':'LOW PRICE · CHARGING';
+      mode.className='pill '+(expensive?'queued':'running');
+      link.classList.toggle('reverse',expensive);
+      workLink.classList.toggle('paused',!expensive);
+      document.getElementById('flowPrice').textContent=expensive?'Current price: $146/MWh':'Current price: $35/MWh';
+      document.getElementById('flowBattery').textContent=expensive?'Discharging to avoid peak-price energy':'Charging to protect the evening peak';
+      document.getElementById('flowWorkload').textContent=expensive?'Critical inference stays on; batch work waits':'Flexible jobs run in this cheap window';
+      document.getElementById('flowDecision').textContent=expensive?'ShiftOS chooses: use stored energy':'ShiftOS chooses: buy energy now';
+      document.getElementById('flowReason').textContent=expensive?'Protect the grid connection · preserve emergency reserve':'Keep reserve above 30% · move fine-tuning before the price spike';
+    }
     function rows(result){
       if(!result || result.error) return [];
       const first=result[0] || result;
@@ -99,7 +137,7 @@
         document.getElementById('backendStatus').textContent='● Demo data · start API for live state';
       }
     }
-    window.addEventListener('resize',render); render(); syncSpacetime(); setInterval(syncSpacetime,5000);
+    window.addEventListener('resize',render); render(); syncSpacetime(); setInterval(syncSpacetime,5000); setInterval(animateEnergyFlow,4000);
     document.getElementById('replan').addEventListener('click',e=>{e.target.textContent='Schedule updated';syncSpacetime();setTimeout(()=>e.target.textContent='Replan schedule',1200)});
   </script>
 </body>
