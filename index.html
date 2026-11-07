@@ -50,6 +50,7 @@
         <div class="row"><div class="job"><div class="job-icon">◈</div><div><div class="job-name">Embedding refresh</div><div class="job-meta">18 kWh · deadline 08:00</div></div></div><span class="pill running">Scheduled 03:15</span></div>
         <div class="row"><div class="job"><div class="job-icon">◆</div><div><div class="job-name">Fine-tune: support-v4</div><div class="job-meta">64 kWh · deadline 23:00</div></div></div><span class="pill queued">Deferred to 01:00</span></div>
         <p class="footnote">ShiftOS keeps latency-sensitive inference online and moves checkpointable work into lower-cost windows while preserving the emergency battery reserve.</p>
+        <p class="footnote" id="forecastSummary">Demand forecast: waiting for ERCOT data.</p>
       </div>
     </section>
   </main>
@@ -88,6 +89,11 @@
           if(ercot.records?.length){ prices.splice(0,prices.length,...ercot.records.map(x=>Number(x.price||0))); status.textContent='● Live · ERCOT prices'; }
         }
         if(demandRows.length){ load.splice(0,load.length,...demandRows.map(x=>Number(x.load_kw||0))); }
+        const forecast=await fetch('/forecast?zone=TOTAL&horizon=4&include_news=true',{cache:'no-store'}).then(r=>r.json());
+        if(forecast.forecast?.length){
+          const newsLabel=forecast.news?.length ? ` · ${forecast.news.length} news signals` : '';
+          document.getElementById('forecastSummary').textContent=`ERCOT demand forecast: ${forecast.forecast.map(v=>Math.round(v).toLocaleString()).join(', ')} MW${newsLabel}`;
+        }
         render();
       } catch (error) {
         document.getElementById('backendStatus').textContent='● Demo data · start API for live state';
