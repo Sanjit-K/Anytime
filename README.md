@@ -1,21 +1,6 @@
-# ShiftOS
+# ShiftOS dashboard
 
-Grid-aware scheduling for AI data centers.
+Self-contained operator dashboard mockup for the grid-aware compute MVP. It uses an inline replay scenario and needs no build step.
 
-ShiftOS reduces electricity cost and peak demand by coordinating battery arbitrage with flexible AI workloads while protecting inference SLAs and emergency reserve.
-
-## MVP
-
-The first milestone is a 24-hour replay simulator that compares an immediate-execution baseline with an optimized schedule. Inputs include electricity prices, fixed and flexible workloads, and battery constraints. Outputs include cost, peak demand, job completion, SLA violations, and savings.
-
-## Project layout
-
-- `engine/` — scheduling and optimization logic
-- `api/` — service API for scenarios and schedules
-- `dashboard/` — operator dashboard
-- `simulator/` — sample scenarios and replay tooling
-
-## Development
-
-Components are intentionally independent during the hackathon. See each directory for local setup instructions as they are added.
+Open `index.html` directly in a browser, or serve the repository with `python -m http.server 8080` and visit `http://localhost:8080/dashboard/` from the repository root.
 

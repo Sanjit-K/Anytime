@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShiftOS | Grid-aware compute</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#121a2d; --line:#263452; --text:#ecf2ff; --muted:#8f9bb7; --green:#5ee6a8; --blue:#70a7ff; --amber:#f7c873; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter, ui-sans-serif, system-ui, sans-serif; background:radial-gradient(circle at 75% -10%, #1a3157 0, var(--bg) 42%); color:var(--text); }
+    .shell { max-width:1200px; margin:0 auto; padding:28px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:28px; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .mark { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; background:linear-gradient(135deg,var(--blue),var(--green)); color:#07101c; font-weight:900; }
+    h1,h2,p { margin:0; } h1 { font-size:22px; letter-spacing:-.02em; } h2 { font-size:15px; margin-bottom:16px; } .subtitle { color:var(--muted); font-size:12px; margin-top:4px; }
+    .status { border:1px solid #2d7159; color:var(--green); background:#102b26; padding:8px 12px; border-radius:999px; font-size:12px; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:14px; }
+    .card { background:rgba(18,26,45,.88); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 12px 35px #0002; }
+    .metric-label { color:var(--muted); font-size:12px; } .metric { font-size:27px; font-weight:750; margin-top:8px; letter-spacing:-.03em; } .delta { color:var(--green); font-size:12px; margin-top:6px; }
+    .wide { grid-column:span 2; } .full { grid-column:1/-1; }
+    .chart { height:220px; position:relative; } canvas { width:100%; height:100%; }
+    .legend { display:flex; gap:16px; color:var(--muted); font-size:11px; margin-top:12px; } .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; } 
+    .row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:13px 0; border-bottom:1px solid #202b45; } .row:last-child { border-bottom:0; }
+    .job { display:flex; align-items:center; gap:10px; } .job-icon { width:28px; height:28px; display:grid; place-items:center; background:#1b2947; border-radius:8px; font-size:13px; } .job-name { font-size:13px; } .job-meta { color:var(--muted); font-size:11px; margin-top:3px; }
+    .pill { padding:5px 9px; border-radius:999px; font-size:11px; } .running { background:#12382f; color:var(--green); } .queued { background:#362d19; color:var(--amber); } .critical { background:#30213c; color:#d1a9ff; }
+    .bar { height:8px; border-radius:8px; background:#202d49; overflow:hidden; margin-top:10px; } .bar > span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--blue),var(--green)); }
+    .toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; } button { border:1px solid #3d66a5; color:var(--text); background:#193462; border-radius:9px; padding:9px 12px; cursor:pointer; font-weight:650; font-size:12px; } button:hover { background:#23477f; }
+    .footnote { color:var(--muted); font-size:11px; margin-top:14px; line-height:1.5; }
+    @media(max-width:850px){ .grid{grid-template-columns:repeat(2,1fr)} .wide{grid-column:span 2} } @media(max-width:560px){ .shell{padding:18px}.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.full{grid-column:auto} header{align-items:flex-start; flex-direction:column} }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand"><div class="mark">S</div><div><h1>ShiftOS</h1><div class="subtitle">Grid-aware AI compute control</div></div></div>
+      <div class="status">● Optimizing 24h schedule</div>
+    </header>
+
+    <section class="grid">
+      <div class="card"><div class="metric-label">Projected cost today</div><div class="metric" id="cost">$1,284</div><div class="delta">▼ 18.4% vs. baseline</div></div>
+      <div class="card"><div class="metric-label">Avoided peak demand</div><div class="metric">420 kW</div><div class="delta">Best window: 02:00–06:00</div></div>
+      <div class="card"><div class="metric-label">Battery state of charge</div><div class="metric">72%</div><div class="bar"><span style="width:72%"></span></div></div>
+      <div class="card"><div class="metric-label">Emergency reserve</div><div class="metric">4.2 h</div><div class="delta">Protected minimum: 30%</div></div>
+
+      <div class="card wide"><div class="toolbar"><h2>Electricity price &amp; load</h2><button id="replan">Replan schedule</button></div><div class="chart"><canvas id="priceChart"></canvas></div><div class="legend"><span><i class="dot" style="background:var(--amber)"></i>Price ($/MWh)</span><span><i class="dot" style="background:var(--blue)"></i>Grid load (kW)</span></div></div>
+      <div class="card wide"><h2>Battery dispatch</h2><div class="chart"><canvas id="batteryChart"></canvas></div><div class="legend"><span><i class="dot" style="background:var(--green)"></i>State of charge</span><span><i class="dot" style="background:var(--blue)"></i>Charge / discharge</span></div></div>
+
+      <div class="card full"><h2>Workload timeline</h2>
+        <div class="row"><div class="job"><div class="job-icon">⚡</div><div><div class="job-name">Live inference API</div><div class="job-meta">2.4 kW · latency SLA &lt; 120 ms</div></div></div><span class="pill critical">Always on</span></div>
+        <div class="row"><div class="job"><div class="job-icon">◈</div><div><div class="job-name">Embedding refresh</div><div class="job-meta">18 kWh · deadline 08:00</div></div></div><span class="pill running">Scheduled 03:15</span></div>
+        <div class="row"><div class="job"><div class="job-icon">◆</div><div><div class="job-name">Fine-tune: support-v4</div><div class="job-meta">64 kWh · deadline 23:00</div></div></div><span class="pill queued">Deferred to 01:00</span></div>
+        <p class="footnote">ShiftOS keeps latency-sensitive inference online and moves checkpointable work into lower-cost windows while preserving the emergency battery reserve.</p>
+      </div>
+    </section>
+  </main>
+  <script>
+    const prices=[38,34,31,29,28,30,42,58,74,91,104,112,108,98,87,79,92,121,146,139,110,82,61,46];
+    const load=[520,510,500,490,500,530,610,680,720,760,790,810,800,770,740,700,730,820,900,860,760,680,600,550];
+    const soc=[52,58,64,70,76,82,78,71,65,60,55,50,45,42,46,52,59,65,61,57,54,52,52,52];
+    function draw(id, series, colors, max){ const c=document.getElementById(id), r=c.getBoundingClientRect(), d=devicePixelRatio||1; c.width=r.width*d;c.height=r.height*d; const x=c.getContext('2d');x.scale(d,d);const w=r.width,h=r.height,p=22; x.strokeStyle='#243250';x.lineWidth=1; for(let i=0;i<4;i++){const y=p+(h-p*2)*i/3;x.beginPath();x.moveTo(p,y);x.lineTo(w-p,y);x.stroke()} series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=2.5;x.beginPath();arr.forEach((v,i)=>{const xx=p+(w-p*2)*i/(arr.length-1), yy=h-p-(v/max)*(h-p*2);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke()}) }
+    function render(){draw('priceChart',[prices,load.map(v=>v/8)],['#f7c873','#70a7ff'],160);draw('batteryChart',[soc],['#5ee6a8'],100)}
+    window.addEventListener('resize',render); render(); document.getElementById('replan').addEventListener('click',e=>{e.target.textContent='Schedule updated';setTimeout(()=>e.target.textContent='Replan schedule',1200)});
+  </script>
+</body>
+</html>
