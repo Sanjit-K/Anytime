@@ -1,0 +1,6 @@
+{
+  "name": "shiftos-spacetime-module",
+  "private": true,
+  "type": "module",
+  "dependencies": { "spacetimedb": "latest" }
+}

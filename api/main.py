@@ -11,6 +11,8 @@ from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from .spacetime import call_reducer
+
 
 class FlexibleJob(BaseModel):
     id: str = Field(min_length=1)
@@ -50,6 +52,14 @@ class Scenario(BaseModel):
 
 class ScheduleRequest(BaseModel):
     scenario: Scenario
+
+
+class TaskResult(BaseModel):
+    workload_id: str = Field(min_length=1)
+    actual_energy_kwh: float = Field(ge=0)
+    actual_duration_slots: int = Field(gt=0)
+    completed_slot: int = Field(ge=0)
+    success: bool = True
 
 
 app = FastAPI(title="ShiftOS API", version="0.1.0")
@@ -127,5 +137,29 @@ def health():
 
 @app.post("/schedule")
 def schedule(request: ScheduleRequest):
-    return build_schedule(request.scenario)
+    result = build_schedule(request.scenario)
+    call_reducer("publish_schedule", {
+        "runId": f"api-{int(__import__('time').time() * 1000)}",
+        "createdAt": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+        "baselineCost": result["metrics"]["baseline_cost"],
+        "optimizedCost": result["metrics"]["optimized_cost"],
+        "savings": result["metrics"]["savings"],
+        "status": "planned",
+        "planJson": __import__('json').dumps(result),
+    })
+    return result
+
+
+@app.post("/task-result")
+def task_result(result: TaskResult):
+    """Record post-task telemetry and make it available for replanning."""
+    call_reducer("record_task_run", {
+        "workloadId": result.workload_id,
+        "actualEnergyKwh": result.actual_energy_kwh,
+        "actualDurationSlots": result.actual_duration_slots,
+        "completedSlot": result.completed_slot,
+        "success": result.success,
+        "recordedAt": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+    })
+    return {"accepted": True, "requires_replan": not result.success}
 
