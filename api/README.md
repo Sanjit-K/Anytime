@@ -3,7 +3,7 @@
 Run from the repository root:
 
 ```bash
-python -m pip install fastapi uvicorn
+python -m pip install -r requirements.txt
 uvicorn api.main:app --reload
 ```
 
