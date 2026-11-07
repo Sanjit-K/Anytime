@@ -54,6 +54,16 @@ uvicorn api.main:app
 
 `cp` only provides a starting file; edit `.env` to set the endpoint URL and actual model served by your Brev NIM. The documented NIM chat route is OpenAI-compatible, and Brev exposes it through port forwarding or a tunnel ([Brev NIM deployment guide](https://docs.nvidia.com/brev/guides/inference-deployment/deploying-nims)). If the NIM requires authentication, set `NEMOTRON_API_KEY` in the environment; do not place a key in the dashboard or commit it. `/nemotron/status` reports configuration without revealing the endpoint, while **Fetch headlines & score with Nemotron** makes a real inference request. An unconfigured, unreachable, or invalid response is shown as unavailable; headline context remains qualitative and is not used as a numeric load or price forecast.
 
+### Brev L40S Nemotron NIM
+
+For a Brev L40S instance (48 GB VRAM), forward local port `8001` to remote port `8000`. To finish the NIM setup:
+
+1. Generate an NGC API key in the NVIDIA NGC account, under profile → Setup → Generate API Key. NVIDIA exposes this key once. Do not send it through chat or put it in Git.
+2. In a Mac Terminal, run `brev shell <your-instance-name>`, then `bash /home/ubuntu/setup_brev_nemotron.sh`. Enter the key at the hidden prompt. The script logs into `nvcr.io`, downloads `nvcr.io/nim/nvidia/nemotron-3-nano:latest`, starts the NIM, and waits for its ready check. The key is used by the container to fetch model files and is retained in its Docker environment on the Brev VM.
+3. Once ready, set `NEMOTRON_ENDPOINT=http://127.0.0.1:8001/v1` and `NEMOTRON_MODEL=nvidia/nemotron-3-nano` in the local ignored `.env`, restart the ShiftOS API with that shell environment, and use **Fetch headlines & score with Nemotron**.
+
+Brev's current listing for the chosen stoppable L40S is $1.74/hour. Stop the instance in Brev when you are finished; the port-forward and local app need it running to call Nemotron.
+
 Live signal commands:
 
 ```bash
