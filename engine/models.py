@@ -33,10 +33,13 @@ class Workload:
     deadline_slot: int | None = None
     duration_slots: int = 1
     critical: bool = False
+    delay_penalty_per_slot: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.name or self.energy_kwh < 0 or self.duration_slots < 1:
             raise ValueError("workload name, energy, and duration are invalid")
+        if self.delay_penalty_per_slot < 0:
+            raise ValueError("delay penalty cannot be negative")
         if self.release_slot < 0:
             raise ValueError("release slot cannot be negative")
         if self.deadline_slot is not None and self.deadline_slot < self.release_slot:
