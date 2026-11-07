@@ -13,6 +13,7 @@ import urllib.request
 
 
 ERCOT_REAL_TIME_SPP_URL = "https://www.ercot.com/content/cdr/html/real_time_spp.html"
+ERCOT_ACTUAL_LOAD_URL = "https://www.ercot.com/content/cdr/html/actual_loads_of_forecast_zones"
 
 
 class _TableParser(HTMLParser):
@@ -65,6 +66,36 @@ def fetch_realtime_spp(zone: str = "HB_NORTH", timeout: int = 15) -> list[dict[s
                 "region": zone,
                 "price": float(row[price_index]),
                 "source": "ERCOT real-time SPP",
+            })
+        except ValueError:
+            continue
+    return records
+
+
+def fetch_actual_load(zone: str = "TOTAL", timeout: int = 15) -> list[dict[str, Any]]:
+    """Return current-day hourly ERCOT actual load in MW for a forecast zone."""
+
+    request = urllib.request.Request(ERCOT_ACTUAL_LOAD_URL, headers={"User-Agent": "ShiftOS/0.1"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        parser = _TableParser()
+        parser.feed(response.read().decode("utf-8", "ignore"))
+    if not parser.rows:
+        return []
+    header = parser.rows[0]
+    if zone not in header:
+        raise ValueError(f"unknown ERCOT forecast zone: {zone}")
+    load_index = header.index(zone)
+    records: list[dict[str, Any]] = []
+    for row in parser.rows[1:]:
+        if len(row) <= load_index or len(row) < 2:
+            continue
+        try:
+            records.append({
+                "oper_day": row[0],
+                "hour_ending": row[1],
+                "region": zone,
+                "load_mw": float(row[load_index]),
+                "source": "ERCOT actual load",
             })
         except ValueError:
             continue

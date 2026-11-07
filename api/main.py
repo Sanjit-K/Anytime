@@ -13,7 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .spacetime import call_reducer, query_sql
-from signals.ercot import fetch_realtime_spp
+from signals.ercot import fetch_actual_load, fetch_realtime_spp
+from signals.forecast import forecast_series
 
 
 class FlexibleJob(BaseModel):
@@ -162,6 +163,29 @@ def ercot_prices(zone: str = "HB_NORTH"):
     except Exception as exc:
         raise HTTPException(502, f"ERCOT price feed unavailable: {exc}") from exc
     return {"source": "ERCOT", "zone": zone, "unit": "USD/MWh", "records": records}
+
+
+@app.get("/ercot/load")
+def ercot_load(zone: str = "TOTAL"):
+    """Fetch current public ERCOT hourly actual load."""
+    try:
+        records = fetch_actual_load(zone)
+    except Exception as exc:
+        raise HTTPException(502, f"ERCOT load feed unavailable: {exc}") from exc
+    return {"source": "ERCOT", "zone": zone, "unit": "MW", "records": records}
+
+
+@app.get("/forecast")
+def forecast(zone: str = "TOTAL", horizon: int = 8):
+    """Create an explainable short-horizon load forecast from live ERCOT data."""
+    if horizon < 1 or horizon > 96:
+        raise HTTPException(422, "horizon must be between 1 and 96")
+    try:
+        records = fetch_actual_load(zone)
+    except Exception as exc:
+        raise HTTPException(502, f"ERCOT load feed unavailable: {exc}") from exc
+    values = [float(record["load_mw"]) for record in records]
+    return {"source": "ERCOT actual load + bounded trend forecast", "zone": zone, "unit": "MW", "observed": records, "forecast": forecast_series(values, horizon)}
 
 
 @app.post("/schedule")
