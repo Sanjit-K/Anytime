@@ -1,7 +1,7 @@
 import unittest
 
 from engine.models import Battery, Scenario, Workload
-from engine.scheduler import baseline, optimize
+from engine.scheduler import baseline, optimize, compare_dispatch
 from engine.post_task import TaskTelemetry, reconcile_post_task
 
 
@@ -38,6 +38,31 @@ class SchedulerTests(unittest.TestCase):
         )
         self.assertTrue(result["requires_replan"])
         self.assertAlmostEqual(result["energy_variance_kwh"]["batch"], 0.2)
+
+    def test_cost_uses_usd_per_mwh_and_kwh_once(self):
+        scenario = Scenario(prices=[1000], fixed_load_kwh=[2])
+        self.assertEqual(baseline(scenario).total_cost, 2.0)
+
+    def test_comparison_keeps_full_jobs_and_applies_economic_charges(self):
+        result = compare_dispatch(self.scenario(), degradation_usd_per_kwh=.1,
+                                  demand_charge_usd_per_kw=2)
+        self.assertEqual(set(result) - {"assumptions"}, {"grid_only", "threshold", "optimized"})
+        self.assertEqual(result["grid_only"]["workload_slots"]["batch"], [0, 1])
+        self.assertEqual(len(result["optimized"]["workload_slots"]["batch"]), 2)
+        self.assertGreater(result["grid_only"]["demand_charge_usd"], 0)
+        self.assertGreaterEqual(result["threshold"]["battery_soc_kwh"][-1], 1)
+        for strategy in ("grid_only", "threshold", "optimized"):
+            row = result[strategy]
+            self.assertAlmostEqual(row["total_cost_usd"], sum(row[k] for k in (
+                "energy_cost_usd", "demand_charge_usd", "degradation_usd", "terminal_energy_cost_usd")))
+
+    def test_terminal_soc_deficit_is_valued_and_reserve_is_kept(self):
+        scenario = Scenario(prices=[1, 100], fixed_load_kwh=[1, 10],
+            battery=Battery(10, 5, 5, initial_soc_kwh=8, reserve_kwh=3), interval_hours=1)
+        result=compare_dispatch(scenario)
+        threshold=result["threshold"]
+        self.assertGreater(threshold["terminal_energy_cost_usd"],0)
+        self.assertTrue(all(soc>=3 for soc in threshold["battery_soc_kwh"]))
 
 
 if __name__ == "__main__":

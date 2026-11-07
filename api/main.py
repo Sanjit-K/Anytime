@@ -22,6 +22,8 @@ from simulator.local_demo import demo
 from . import demo_runtime
 from engine.models import Battery as EngineBattery, Scenario as EngineScenario, Workload as EngineWorkload
 from engine.robust import robust_optimize
+from engine.models import Scenario as PlanScenario, Battery as PlanBattery, Workload as PlanWorkload
+from engine.scheduler import compare_dispatch as engine_compare_dispatch
 
 
 class FlexibleJob(BaseModel):
@@ -260,6 +262,81 @@ def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
 def demo_state():
     """Read-only snapshot; the background clock advances the experiment."""
     return demo_runtime.snapshot()
+
+
+@app.get("/demo/price-curve")
+def demo_price_curve():
+    """Return 24 hours of dated published ERCOT settlement prices."""
+    from signals.replay import historical_price_replay
+    try:
+        return historical_price_replay(24, "HB_NORTH")
+    except Exception as exc:
+        raise HTTPException(502, f"ERCOT historical replay unavailable: {exc}") from exc
+
+
+class CompareRequest(BaseModel):
+    prices_usd_mwh: List[float] = Field(min_length=4, max_length=96)
+    interval_minutes: int = Field(default=15, ge=1, le=60)
+    load_kw: float = Field(gt=0, le=100000)
+    battery_kwh: float = Field(gt=0, le=1000000)
+    charge_kw: float = Field(gt=0, le=100000)
+    discharge_kw: float = Field(gt=0, le=100000)
+    initial_soc_pct: float = Field(default=60, ge=0, le=100)
+    reserve_pct: float = Field(default=20, ge=0, le=100)
+    round_trip_efficiency: float = Field(default=0.9, gt=0.01, le=1)
+    degradation_usd_kwh: float = Field(default=0, ge=0, le=10)
+    demand_charge_usd_kw: float = Field(default=0, ge=0, le=10000)
+    flexible_workload_kwh: float = Field(default=0, ge=0, le=1000000)
+    workload_deadline_slot: int = Field(default=95, ge=1, le=95)
+
+
+@app.post("/compare-dispatch")
+def compare_dispatch(request: CompareRequest):
+    """Replay identical prices/load against grid, threshold, and optimizer."""
+    from engine.models import Scenario as EngineScenario, Battery as EngineBattery, Workload as EngineWorkload
+    prices = request.prices_usd_mwh
+    n = len(prices); hours = request.interval_minutes / 60
+    if any(p < 0 for p in prices):
+        raise HTTPException(422, "Negative price values are not supported in this comparison")
+    reserve = request.battery_kwh * request.reserve_pct / 100
+    initial = request.battery_kwh * request.initial_soc_pct / 100
+    if reserve > initial:
+        raise HTTPException(422, "Initial state of charge must be at or above the reserve")
+    efficiency = request.round_trip_efficiency ** .5
+    battery = EngineBattery(request.battery_kwh, request.charge_kw, request.discharge_kw,
+        charge_efficiency=efficiency, discharge_efficiency=efficiency,
+        initial_soc_kwh=initial, reserve_kwh=reserve)
+    fixed = [request.load_kw * hours] * n
+    workloads = []
+    if request.flexible_workload_kwh:
+        workloads.append(EngineWorkload("flexible_batch", request.flexible_workload_kwh,
+            release_slot=0, deadline_slot=min(request.workload_deadline_slot, n-1),
+            duration_slots=1, critical=False))
+    scenario = EngineScenario(prices, fixed, workloads, battery, hours)
+    try:
+        result = engine_compare_dispatch(scenario,
+            degradation_usd_per_kwh=request.degradation_usd_kwh,
+            demand_charge_usd_per_kw=request.demand_charge_usd_kw)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    normalized={}
+    for key, name in (("grid_only","Grid only"),("threshold","Threshold control"),("optimized","ShiftOS optimizer")):
+        row=result[key]
+        normalized[key]={"name":name,"energy_cost_usd":row["energy_cost_usd"],
+            "demand_charge_usd":row["demand_charge_usd"],"degradation_usd":row["degradation_usd"],
+            "terminal_energy_cost_usd":row["terminal_energy_cost_usd"],"total_usd":row["total_cost_usd"],
+            "peak_grid_kw":row["peak_grid_kw"],"grid_kwh":row["grid_kwh"],
+            "battery_soc_kwh":row["battery_soc_kwh"],"workload_slots":row["workload_slots"],
+            "battery_discharge_kwh":row["battery_discharge_kwh"]}
+    normalized["assumptions"]=result["assumptions"]
+    return {"kind":"historical_replay", "slots":n,"interval_minutes":request.interval_minutes,
+        "unit_price":"USD/MWh","cost_unit":"USD", **normalized,
+        "assumptions":{"load_kw":request.load_kw,"battery_kwh":request.battery_kwh,
+        "initial_soc_pct":request.initial_soc_pct,"reserve_pct":request.reserve_pct,
+        "round_trip_efficiency":request.round_trip_efficiency,
+        "degradation_usd_kwh":request.degradation_usd_kwh,
+        "demand_charge_usd_kw":request.demand_charge_usd_kw},
+        "note":"Historical replay, not a forecast. All three strategies run the same workload and begin at the same state of charge. Demand charges use horizon peak kW; degradation uses battery discharge throughput. Cost = USD/MWh × kWh / 1000; terminal energy deficit is replenished at the final interval price."}
 
 
 class JobCommand(BaseModel):
