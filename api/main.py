@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, field_validator
 from .spacetime import call_reducer, query_sql
 from signals.ercot import fetch_actual_load, fetch_realtime_spp
 from signals.forecast import forecast_series
+from signals.demand import forecast_demand
+from signals.news_forecast import fetch_rss, score_with_nemotron
 
 
 class FlexibleJob(BaseModel):
@@ -176,8 +178,8 @@ def ercot_load(zone: str = "TOTAL"):
 
 
 @app.get("/forecast")
-def forecast(zone: str = "TOTAL", horizon: int = 8):
-    """Create an explainable short-horizon load forecast from live ERCOT data."""
+def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
+    """Create a short-horizon load forecast from ERCOT data and news context."""
     if horizon < 1 or horizon > 96:
         raise HTTPException(422, "horizon must be between 1 and 96")
     try:
@@ -185,7 +187,25 @@ def forecast(zone: str = "TOTAL", horizon: int = 8):
     except Exception as exc:
         raise HTTPException(502, f"ERCOT load feed unavailable: {exc}") from exc
     values = [float(record["load_mw"]) for record in records]
-    return {"source": "ERCOT actual load + bounded trend forecast", "zone": zone, "unit": "MW", "observed": records, "forecast": forecast_series(values, horizon)}
+    news = []
+    if include_news:
+        try:
+            headlines = fetch_rss(f"ERCOT electricity demand {zone}", limit=6)
+            news = score_with_nemotron(headlines)
+        except Exception:
+            news = []
+    baseline = forecast_series(values, horizon)
+    adjusted = forecast_demand(baseline, news, horizon=horizon) if news else baseline
+    nemotron_scored = any(signal.confidence > 0 for signal in news)
+    return {
+        "source": "ERCOT actual load + bounded trend + Nemotron news adjustment" if nemotron_scored else ("ERCOT actual load + bounded trend + headlines collected" if news else "ERCOT actual load + bounded trend"),
+        "zone": zone,
+        "unit": "MW",
+        "observed": records,
+        "forecast": adjusted,
+        "baseline_forecast": baseline,
+        "news": [signal.__dict__ for signal in news],
+    }
 
 
 @app.post("/schedule")

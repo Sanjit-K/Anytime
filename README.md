@@ -33,4 +33,12 @@ Open `index.html` directly for the dashboard prototype.
 
 Set `SPACETIME_URI`, `SPACETIME_DATABASE`, and optionally `SPACETIME_TOKEN` to have the API publish schedules and task results to SpacetimeDB. Set `NEMOTRON_ENDPOINT`, `NEMOTRON_MODEL`, and optionally `NEMOTRON_API_KEY` to score news headlines through an OpenAI-compatible Nemotron endpoint.
 
+Live signal commands:
+
+```bash
+PYTHONPATH=. python scripts/ingest_ercot.py --database shiftos --zone HB_NORTH
+curl 'http://127.0.0.1:8000/ercot/prices?zone=HB_NORTH'
+curl 'http://127.0.0.1:8000/forecast?zone=TOTAL&horizon=8&include_news=false'
+```
+
 Because the module lives in `spacetime/`, publish from the repository root with `spacetime publish -p spacetime shiftos`, or from inside that directory with `spacetime publish -p . shiftos`.
