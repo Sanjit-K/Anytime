@@ -18,6 +18,8 @@ from signals.forecast import forecast_series
 from signals.demand import forecast_demand
 from signals.news_forecast import fetch_rss, score_with_nemotron
 from simulator.local_demo import demo
+from engine.models import Battery as EngineBattery, Scenario as EngineScenario, Workload as EngineWorkload
+from engine.robust import robust_optimize
 
 
 class FlexibleJob(BaseModel):
@@ -25,6 +27,7 @@ class FlexibleJob(BaseModel):
     power_kw: float = Field(gt=0)
     duration_slots: int = Field(gt=0)
     deadline_slot: int = Field(gt=0)
+    delay_penalty_per_slot: float = Field(default=0, ge=0)
 
 
 class Scenario(BaseModel):
@@ -58,6 +61,10 @@ class Scenario(BaseModel):
 
 class ScheduleRequest(BaseModel):
     scenario: Scenario
+
+
+class RobustScheduleRequest(ScheduleRequest):
+    risk_aversion: float = Field(default=0.35, ge=0, le=2)
 
 
 class TaskResult(BaseModel):
@@ -134,6 +141,33 @@ def build_schedule(s: Scenario) -> dict:
             "optimized_peak_kw": round(max(grid, default=0), 2),
         },
     }
+
+
+def _engine_scenario(s: Scenario) -> EngineScenario:
+    slot_hours = s.interval_minutes / 60
+    battery = EngineBattery(
+        capacity_kwh=s.battery_capacity_kwh,
+        max_charge_kw=s.max_charge_kw,
+        max_discharge_kw=s.max_discharge_kw,
+        charge_efficiency=s.round_trip_efficiency ** 0.5,
+        discharge_efficiency=s.round_trip_efficiency ** 0.5,
+        initial_soc_kwh=s.initial_soc_kwh,
+        reserve_kwh=s.reserve_soc_kwh,
+    )
+    return EngineScenario(
+        prices=list(s.prices),
+        fixed_load_kwh=[s.fixed_load_kw * slot_hours] * len(s.prices),
+        battery=battery,
+        workloads=[EngineWorkload(
+            name=job.id,
+            energy_kwh=job.power_kw * job.duration_slots * slot_hours,
+            duration_slots=job.duration_slots,
+            deadline_slot=job.deadline_slot,
+            critical=False,
+            delay_penalty_per_slot=job.delay_penalty_per_slot,
+        ) for job in s.flexible_jobs],
+        interval_hours=slot_hours,
+    )
 
 
 @app.get("/health")
@@ -213,6 +247,13 @@ def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
 def demo_state():
     """Advance and return one local digital-twin control-loop tick."""
     return demo.tick()
+
+
+@app.post("/robust-schedule")
+def robust_schedule(request: RobustScheduleRequest):
+    """Plan against low/base/scarcity price futures with explanations."""
+    result = robust_optimize(_engine_scenario(request.scenario), risk_aversion=request.risk_aversion)
+    return result.as_dict()
 
 
 @app.post("/schedule")
