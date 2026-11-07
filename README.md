@@ -31,6 +31,16 @@ uvicorn api.main:app --reload
 
 Open `index.html` directly for the dashboard prototype.
 
+## Local physical proof of concept
+
+Run the local digital twin on a MacBook:
+
+```bash
+uvicorn api.main:app --reload
+```
+
+The dashboard advances a virtual battery and two workload classes every few seconds. It uses live ERCOT `HB_NORTH` prices when reachable and falls back to a small synthetic price trace if the feed is unavailable. This is a control-loop demonstration; it does not read or control the MacBook's physical battery.
+
 Set `SPACETIME_URI`, `SPACETIME_DATABASE`, and optionally `SPACETIME_TOKEN` to have the API publish schedules and task results to SpacetimeDB. Set `NEMOTRON_ENDPOINT`, `NEMOTRON_MODEL`, and optionally `NEMOTRON_API_KEY` to score news headlines through an OpenAI-compatible Nemotron endpoint.
 
 Live signal commands:

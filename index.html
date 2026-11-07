@@ -98,6 +98,20 @@
       document.getElementById('flowDecision').textContent=expensive?'ShiftOS chooses: use stored energy':'ShiftOS chooses: buy energy now';
       document.getElementById('flowReason').textContent=expensive?'Protect the grid connection · preserve emergency reserve':'Keep reserve above 30% · move fine-tuning before the price spike';
     }
+    async function syncDemo(){
+      try {
+        const demo=await fetch('/demo/state',{cache:'no-store'}).then(r=>r.json());
+        const high=demo.mode==='discharging';
+        document.getElementById('flowMode').textContent=high?'HIGH PRICE · DISCHARGING':(demo.mode==='charging'?'LOW PRICE · CHARGING':'STEADY · HOLDING RESERVE');
+        document.getElementById('flowMode').className='pill '+(high?'queued':'running');
+        document.getElementById('flowPrice').textContent=`${demo.source} · $${demo.price_usd_mwh}/MWh`;
+        document.getElementById('flowBattery').textContent=high?'Discharging to protect the grid connection':`Virtual battery at ${demo.battery_soc_percent}% · charging when cheap`;
+        document.getElementById('flowWorkload').textContent=demo.flexible_workload==='deferred'?'Critical inference on · batch work deferred':'Flexible jobs running in the available window';
+        document.getElementById('flowDecision').textContent=high?'ShiftOS chooses: use stored energy':'ShiftOS chooses: buy energy now';
+        document.getElementById('soc').textContent=demo.battery_soc_percent+'%';
+        document.getElementById('socBar').style.width=demo.battery_soc_percent+'%';
+      } catch (_) {}
+    }
     function rows(result){
       if(!result || result.error) return [];
       const first=result[0] || result;
@@ -137,7 +151,7 @@
         document.getElementById('backendStatus').textContent='● Demo data · start API for live state';
       }
     }
-    window.addEventListener('resize',render); render(); syncSpacetime(); setInterval(syncSpacetime,5000); setInterval(animateEnergyFlow,4000);
+    window.addEventListener('resize',render); render(); syncSpacetime(); syncDemo(); setInterval(syncSpacetime,5000); setInterval(syncDemo,2500);
     document.getElementById('replan').addEventListener('click',e=>{e.target.textContent='Schedule updated';syncSpacetime();setTimeout(()=>e.target.textContent='Replan schedule',1200)});
   </script>
 </body>

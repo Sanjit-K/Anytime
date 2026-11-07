@@ -17,6 +17,7 @@ from signals.ercot import fetch_actual_load, fetch_realtime_spp
 from signals.forecast import forecast_series
 from signals.demand import forecast_demand
 from signals.news_forecast import fetch_rss, score_with_nemotron
+from simulator.local_demo import demo
 
 
 class FlexibleJob(BaseModel):
@@ -206,6 +207,12 @@ def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
         "baseline_forecast": baseline,
         "news": [signal.__dict__ for signal in news],
     }
+
+
+@app.get("/demo/state")
+def demo_state():
+    """Advance and return one local digital-twin control-loop tick."""
+    return demo.tick()
 
 
 @app.post("/schedule")
