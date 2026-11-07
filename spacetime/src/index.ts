@@ -20,10 +20,10 @@ const spacetimedb = schema({ priceSignal, demandSignal, workload, schedule, task
 export default spacetimedb;
 
 export const ingestPrice = spacetimedb.reducer({ region: t.string(), slot: t.u32(), price: t.f64(), source: t.string(), observedAt: t.string() }, (ctx, value) => {
-  ctx.db.priceSignal.insert(value);
+  ctx.db.priceSignal.insert({ id: 0n, ...value });
 });
 export const ingestDemand = spacetimedb.reducer({ region: t.string(), slot: t.u32(), loadKw: t.f64(), newsImpact: t.f64(), confidence: t.f64(), source: t.string() }, (ctx, value) => {
-  ctx.db.demandSignal.insert(value);
+  ctx.db.demandSignal.insert({ id: 0n, ...value });
 });
 export const upsertWorkload = spacetimedb.reducer({ id: t.string(), name: t.string(), powerKw: t.f64(), durationSlots: t.u32(), deadlineSlot: t.u32(), critical: t.bool(), status: t.string() }, (ctx, value) => {
   const existing = ctx.db.workload.id.find(value.id);
@@ -33,5 +33,5 @@ export const publishSchedule = spacetimedb.reducer({ runId: t.string(), createdA
   ctx.db.schedule.insert(value);
 });
 export const recordTaskRun = spacetimedb.reducer({ workloadId: t.string(), actualEnergyKwh: t.f64(), actualDurationSlots: t.u32(), completedSlot: t.u32(), success: t.bool(), recordedAt: t.string() }, (ctx, value) => {
-  ctx.db.taskRun.insert(value);
+  ctx.db.taskRun.insert({ id: 0n, ...value });
 });

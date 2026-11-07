@@ -7,8 +7,16 @@ This module is the live backend for price signals, demand signals, workloads, sc
 Install the [SpacetimeDB CLI](https://spacetimedb.com/docs/), then run:
 
 ```bash
-spacetime start
-spacetime dev
+npm install
+cd ..
+spacetime build -p spacetime
 ```
 
-The current docs use `spacetime dev --template basic-ts` for a fresh TypeScript module. Publish this module with `spacetime publish shiftos` when logged in.
+From the repository root, publish this module with:
+
+```bash
+spacetime login
+spacetime publish -p spacetime shiftos
+```
+
+The `-p spacetime` flag is important because this repository keeps the module in `spacetime/` rather than the default `spacetimedb/` directory.
