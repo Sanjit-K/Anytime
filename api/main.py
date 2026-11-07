@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .spacetime import call_reducer, query_sql
@@ -179,4 +180,9 @@ def task_result(result: TaskResult):
         "recordedAt": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
     })
     return {"accepted": True, "requires_replan": not result.success}
+
+
+# Serve the operator dashboard from the same origin as /state for a zero-CORS
+# local demo. API routes above are registered before this catch-all mount.
+app.mount("/", StaticFiles(directory=".", html=True), name="dashboard")
 
