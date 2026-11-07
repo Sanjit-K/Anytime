@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .spacetime import call_reducer, query_sql
+from signals.ercot import fetch_realtime_spp
 
 
 class FlexibleJob(BaseModel):
@@ -151,6 +152,16 @@ def state():
     results = {name: query_sql(sql) for name, sql in queries.items()}
     connected = all(value is not None for value in results.values())
     return {"connected": connected, "database": __import__('os').getenv("SPACETIME_DATABASE"), "results": results}
+
+
+@app.get("/ercot/prices")
+def ercot_prices(zone: str = "HB_NORTH"):
+    """Fetch current public ERCOT real-time prices for the requested hub/zone."""
+    try:
+        records = fetch_realtime_spp(zone)
+    except Exception as exc:
+        raise HTTPException(502, f"ERCOT price feed unavailable: {exc}") from exc
+    return {"source": "ERCOT", "zone": zone, "unit": "USD/MWh", "records": records}
 
 
 @app.post("/schedule")

@@ -83,6 +83,10 @@
         const priceRows=rows(state.results?.prices).sort((a,b)=>(a.slot||0)-(b.slot||0));
         const demandRows=rows(state.results?.demand).sort((a,b)=>(a.slot||0)-(b.slot||0));
         if(priceRows.length){ prices.splice(0,prices.length,...priceRows.map(x=>Number(x.price||0))); }
+        else {
+          const ercot=await fetch('/ercot/prices?zone=HB_NORTH',{cache:'no-store'}).then(r=>r.json());
+          if(ercot.records?.length){ prices.splice(0,prices.length,...ercot.records.map(x=>Number(x.price||0))); status.textContent='● Live · ERCOT prices'; }
+        }
         if(demandRows.length){ load.splice(0,load.length,...demandRows.map(x=>Number(x.load_kw||0))); }
         render();
       } catch (error) {
