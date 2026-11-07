@@ -4,6 +4,8 @@ Grid-aware scheduling for AI data centers.
 
 ShiftOS reduces electricity cost and peak demand by coordinating battery arbitrage with flexible AI workloads while protecting inference SLAs and emergency reserve.
 
+Its differentiator is scenario-aware dispatch: workloads are treated as energy bids with deadlines and delay penalties, and the planner evaluates low-demand, base, and scarcity price futures before choosing a schedule. The simple threshold controller remains only as the local digital-twin fallback.
+
 The system has two optimization loops: a pre-task planner that uses prices, local demand, and Nemotron-scored news signals to place flexible jobs, and a post-task reconciler that compares planned versus actual energy and triggers replanning when execution deviates.
 
 The engine contains the hackathon MVP scheduler. Run tests with:
