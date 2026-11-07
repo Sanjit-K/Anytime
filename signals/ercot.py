@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from typing import Any
+import ssl
+import certifi
 import urllib.request
 
 
@@ -46,7 +48,7 @@ def fetch_realtime_spp(zone: str = "HB_NORTH", timeout: int = 15) -> list[dict[s
     """Return current-day 15-minute ERCOT prices in $/MWh for one hub/zone."""
 
     request = urllib.request.Request(ERCOT_REAL_TIME_SPP_URL, headers={"User-Agent": "ShiftOS/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context(cafile=certifi.where())) as response:
         parser = _TableParser()
         parser.feed(response.read().decode("utf-8", "ignore"))
     if not parser.rows:
@@ -76,7 +78,7 @@ def fetch_actual_load(zone: str = "TOTAL", timeout: int = 15) -> list[dict[str, 
     """Return current-day hourly ERCOT actual load in MW for a forecast zone."""
 
     request = urllib.request.Request(ERCOT_ACTUAL_LOAD_URL, headers={"User-Agent": "ShiftOS/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context(cafile=certifi.where())) as response:
         parser = _TableParser()
         parser.feed(response.read().decode("utf-8", "ignore"))
     if not parser.rows:

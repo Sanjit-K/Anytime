@@ -6,10 +6,11 @@ be wired to the richer engine package without changing the request contract.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .spacetime import call_reducer, query_sql
@@ -18,6 +19,7 @@ from signals.forecast import forecast_series
 from signals.demand import forecast_demand
 from signals.news_forecast import fetch_rss, score_with_nemotron
 from simulator.local_demo import demo
+from . import demo_runtime
 from engine.models import Battery as EngineBattery, Scenario as EngineScenario, Workload as EngineWorkload
 from engine.robust import robust_optimize
 
@@ -75,7 +77,17 @@ class TaskResult(BaseModel):
     success: bool = True
 
 
-app = FastAPI(title="ShiftOS API", version="0.1.0")
+app = FastAPI(title="ShiftOS API", version="0.2.0", lifespan=demo_runtime.lifespan)
+
+
+@app.middleware("http")
+async def protect_local_controls(request: Request, call_next):
+    # The controller operates local USB hardware; browser control is same-origin.
+    if request.url.path.startswith("/demo/") and request.method != "GET":
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "Hardware controls require the local application origin"}, status_code=403)
+    return await call_next(request)
 
 
 def _job_slots(job: FlexibleJob, prices: List[float]) -> List[int]:
@@ -172,7 +184,8 @@ def _engine_scenario(s: Scenario) -> EngineScenario:
 
 @app.get("/health")
 def health():
-    connected = query_sql("SELECT * FROM schedule LIMIT 1") is not None
+    result = query_sql("SELECT * FROM schedule LIMIT 1")
+    connected = result is not None and not (isinstance(result, dict) and "error" in result)
     return {"status": "ok", "service": "shiftos-api", "spacetime": connected}
 
 
@@ -188,7 +201,7 @@ def state():
         "tasks": "SELECT * FROM task_run LIMIT 20",
     }
     results = {name: query_sql(sql) for name, sql in queries.items()}
-    connected = all(value is not None for value in results.values())
+    connected = all(value is not None and not (isinstance(value, dict) and "error" in value) for value in results.values())
     return {"connected": connected, "database": __import__('os').getenv("SPACETIME_DATABASE"), "results": results}
 
 
@@ -245,8 +258,48 @@ def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
 
 @app.get("/demo/state")
 def demo_state():
-    """Advance and return one local digital-twin control-loop tick."""
-    return demo.tick()
+    """Read-only snapshot; the background clock advances the experiment."""
+    return demo_runtime.snapshot()
+
+
+class JobCommand(BaseModel):
+    action: Literal["start", "pause", "resume", "stop"]
+    target: Literal["auto", "arduino", "mac"] = "auto"
+    duration_seconds: int = Field(default=60, ge=5, le=300)
+
+
+@app.post("/demo/job")
+def demo_job(command: JobCommand):
+    try:
+        if command.action == "start":
+            demo_runtime.hardware.start(target=command.target, duration_seconds=command.duration_seconds)
+        else:
+            getattr(demo_runtime.hardware, command.action)()
+        demo.advance(demo_runtime.hardware.snapshot())
+        return demo_runtime.snapshot()
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class DispatchCommand(BaseModel):
+    mode: Literal["auto", "charge", "discharge", "hold"]
+
+
+@app.post("/demo/dispatch")
+def demo_dispatch(command: DispatchCommand):
+    demo.advance(demo_runtime.hardware.snapshot())
+    demo.control(command.mode)
+    return demo_runtime.snapshot()
+
+
+@app.post("/demo/configure")
+def demo_configure(assumptions: dict):
+    try:
+        demo.configure(**assumptions)
+        demo.advance(demo_runtime.hardware.snapshot())
+        return demo_runtime.snapshot()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/robust-schedule")
@@ -285,7 +338,8 @@ def task_result(result: TaskResult):
     return {"accepted": True, "requires_replan": not result.success}
 
 
-# Serve the operator dashboard from the same origin as /state for a zero-CORS
-# local demo. API routes above are registered before this catch-all mount.
-app.mount("/", StaticFiles(directory=".", html=True), name="dashboard")
+@app.get("/", include_in_schema=False)
+def dashboard():
+    # Serve only the dashboard, never the repository or local environment files.
+    return FileResponse(Path(__file__).resolve().parents[1] / "index.html", headers={"Cache-Control": "no-store"})
 

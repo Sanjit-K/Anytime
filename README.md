@@ -1,20 +1,8 @@
 # ShiftOS
 
-Grid-aware scheduling for AI data centers.
+ShiftOS is a local hardware-in-the-loop electricity arbitrage experiment. A bounded SHA-256 compute job runs on an attached Arduino UNO Q. The dashboard pairs its measured runtime with clearly editable wattage assumptions, current published ERCOT HB_NORTH prices, and a virtual battery model. It visualizes the difference between grid-only and simulated storage dispatch.
 
-ShiftOS reduces electricity cost and peak demand by coordinating battery arbitrage with flexible AI workloads while protecting inference SLAs and emergency reserve.
-
-Its differentiator is scenario-aware dispatch: workloads are treated as energy bids with deadlines and delay penalties, and the planner evaluates low-demand, base, and scarcity price futures before choosing a schedule. The simple threshold controller remains only as the local digital-twin fallback.
-
-The system has two optimization loops: a pre-task planner that uses prices, local demand, and Nemotron-scored news signals to place flexible jobs, and a post-task reconciler that compares planned versus actual energy and triggers replanning when execution deviates.
-
-The engine contains the hackathon MVP scheduler. Run tests with:
-
-```bash
-PYTHONPATH=. python -m unittest discover -s tests -v
-```
-
-`baseline(scenario)` runs workloads immediately without storage arbitrage. `optimize(scenario)` uses a transparent greedy policy to move flexible workloads into low-price slots and charge/discharge the configured battery.
+This proof of concept estimates power and energy; it has no power meter and does not switch electrical power. Its virtual battery is independent of the MacBook battery. Mac charge percentage and power source are read from macOS, but never controlled. ERCOT hub prices are a wholesale reference, not a residential tariff or actual electricity trade. Storage begins with a nonzero charge, whose replacement cost is included in the modeled comparison. If prices are missing or stale, cost and savings are unavailable instead of extrapolated.
 
 ## Project layout
 
@@ -27,23 +15,31 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 ## Run the API
 
 ```bash
-pip install fastapi uvicorn pydantic
+pip install -r requirements.txt
 uvicorn api.main:app --reload
 ```
 
-Open `index.html` directly for the dashboard prototype.
+Open http://127.0.0.1:8000. Connect the UNO Q with USB debugging (ADB) enabled. The dashboard will identify an Arduino Linux processor before it permits a board job; it never silently substitutes Mac compute. Press **Start job** to launch a bounded job (5–300 active seconds). Pause, resume, or stop are sent to the worker and acknowledged from device telemetry.
 
 ## Local physical proof of concept
 
-Run the local digital twin on a MacBook:
+The application reads the current day's public ERCOT 15-minute HB_NORTH settlement point intervals and refreshes every five minutes. The background clock integrates the experiment once per second; browser refreshes only read a snapshot. Price data older than 45 minutes pauses arbitrage. The automatic dispatch rule uses observed price quartiles and an explicit round-trip efficiency input; it is a heuristic, not a forecast or optimizer.
 
 ```bash
-uvicorn api.main:app --reload
+uvicorn api.main:app
 ```
 
-The dashboard advances a virtual battery and two workload classes every few seconds. It uses live ERCOT `HB_NORTH` prices when reachable and falls back to a small synthetic price trace if the feed is unavailable. This is a control-loop demonstration; it does not read or control the MacBook's physical battery.
+Job measurements are hash counts, active time and CPU time. Idle/active watts and battery capacity are assumptions and editable in the dashboard. Experiment costs use `USD/MWh × Wh / 1,000,000`; the baseline and storage case model the same estimated work at the observed wholesale price. The ledger includes losses and the cost to replace depleted initial battery energy. It represents modeled energy costs, not demonstrated savings on a real bill.
 
-Set `SPACETIME_URI`, `SPACETIME_DATABASE`, and optionally `SPACETIME_TOKEN` to have the API publish schedules and task results to SpacetimeDB. Set `NEMOTRON_ENDPOINT`, `NEMOTRON_MODEL`, and optionally `NEMOTRON_API_KEY` to score news headlines through an OpenAI-compatible Nemotron endpoint.
+To save sanitized experiment snapshots to the existing public SpacetimeDB module, start the API with:
+
+```bash
+SPACETIME_URI=https://maincloud.spacetimedb.com SPACETIME_DATABASE=shiftos uvicorn api.main:app
+```
+
+The dashboard reports the last confirmed saved sample and any write error. Snapshots omit serial numbers, process IDs and local file paths. No cloud connection is claimed when those environment variables are absent.
+
+The repo still includes separate experimental schedule/forecast endpoints and Nemotron adapter code. They are not connected to this dashboard's energy experiment; no LLM forecast or local-demand forecast is presented as live data.
 
 Live signal commands:
 
