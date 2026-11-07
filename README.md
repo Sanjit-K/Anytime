@@ -39,7 +39,20 @@ SPACETIME_URI=https://maincloud.spacetimedb.com SPACETIME_DATABASE=shiftos uvico
 
 The dashboard reports the last confirmed saved sample and any write error. Snapshots omit serial numbers, process IDs and local file paths. No cloud connection is claimed when those environment variables are absent.
 
-The repo still includes separate experimental schedule/forecast endpoints and Nemotron adapter code. They are not connected to this dashboard's energy experiment; no LLM forecast or local-demand forecast is presented as live data.
+The repo also includes an experimental ERCOT actual-load trend endpoint. Its trend output is not a market price forecast and does not control this comparison.
+
+## Optional live Nemotron news scoring through Brev
+
+Deploy or start an NVIDIA NIM with a Nemotron model on a Brev instance, then forward its port to this Mac. Brev NIM serves an OpenAI-compatible chat API on port 8000. Keep ShiftOS on port 8000 and forward the remote NIM to a different local port, for example:
+
+```bash
+brev port-forward <your-instance> --port 8001:8000
+cp .env.example .env
+set -a; source .env; set +a
+uvicorn api.main:app
+```
+
+`cp` only provides a starting file; edit `.env` to set the endpoint URL and actual model served by your Brev NIM. The documented NIM chat route is OpenAI-compatible, and Brev exposes it through port forwarding or a tunnel ([Brev NIM deployment guide](https://docs.nvidia.com/brev/guides/inference-deployment/deploying-nims)). If the NIM requires authentication, set `NEMOTRON_API_KEY` in the environment; do not place a key in the dashboard or commit it. `/nemotron/status` reports configuration without revealing the endpoint, while **Fetch headlines & score with Nemotron** makes a real inference request. An unconfigured, unreachable, or invalid response is shown as unavailable; headline context remains qualitative and is not used as a numeric load or price forecast.
 
 Live signal commands:
 

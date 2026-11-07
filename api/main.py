@@ -17,7 +17,7 @@ from .spacetime import call_reducer, query_sql
 from signals.ercot import fetch_actual_load, fetch_realtime_spp
 from signals.forecast import forecast_series
 from signals.demand import forecast_demand
-from signals.news_forecast import fetch_rss, score_with_nemotron
+from signals.news_forecast import fetch_rss, score_with_nemotron, nemotron_status
 from simulator.local_demo import demo
 from . import demo_runtime
 from engine.models import Battery as EngineBattery, Scenario as EngineScenario, Workload as EngineWorkload
@@ -256,6 +256,35 @@ def forecast(zone: str = "TOTAL", horizon: int = 8, include_news: bool = True):
         "baseline_forecast": baseline,
         "news": [signal.__dict__ for signal in news],
     }
+
+
+@app.get("/nemotron/status")
+def nemotron_connection():
+    """Expose configuration state without returning endpoint URLs or secrets."""
+    return nemotron_status()
+
+
+@app.get("/news/signals")
+def news_signals(zone: str = "ERCOT", limit: int = 6):
+    """Fetch current headlines and score them with the configured Nemotron NIM."""
+    if not 1 <= limit <= 10:
+        raise HTTPException(422, "limit must be between 1 and 10")
+    status=nemotron_status()
+    if not status["configured"]:
+        raise HTTPException(503, status["endpoint_hint"])
+    try:
+        headlines=fetch_rss(f"ERCOT electricity demand {zone}",limit=limit)
+        if not headlines:
+            return {"status":"no_headlines","zone":zone,"signals":[],"model":status["model"]}
+        signals=score_with_nemotron(headlines)
+        if not signals:
+            raise ValueError("Nemotron returned no valid scores")
+        return {"status":"scored","zone":zone,"model":status["model"],
+            "source":"Google News RSS headlines scored by configured Nemotron endpoint",
+            "signals":[signal.__dict__ for signal in signals],
+            "interpretation":"Qualitative news context only; these scores are not a numerical ERCOT load or price forecast."}
+    except Exception as exc:
+        raise HTTPException(502,f"Nemotron news scoring failed: {type(exc).__name__}: {exc}") from exc
 
 
 @app.get("/demo/state")
