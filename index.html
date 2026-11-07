@@ -33,14 +33,14 @@
   <main class="shell">
     <header>
       <div class="brand"><div class="mark">S</div><div><h1>ShiftOS</h1><div class="subtitle">Grid-aware AI compute control</div></div></div>
-      <div class="status">● Optimizing 24h schedule</div>
+      <div class="status" id="backendStatus">● Demo data · connecting to Spacetime</div>
     </header>
 
     <section class="grid">
-      <div class="card"><div class="metric-label">Projected cost today</div><div class="metric" id="cost">$1,284</div><div class="delta">▼ 18.4% vs. baseline</div></div>
-      <div class="card"><div class="metric-label">Avoided peak demand</div><div class="metric">420 kW</div><div class="delta">Best window: 02:00–06:00</div></div>
-      <div class="card"><div class="metric-label">Battery state of charge</div><div class="metric">72%</div><div class="bar"><span style="width:72%"></span></div></div>
-      <div class="card"><div class="metric-label">Emergency reserve</div><div class="metric">4.2 h</div><div class="delta">Protected minimum: 30%</div></div>
+      <div class="card"><div class="metric-label">Projected cost today</div><div class="metric" id="cost">$1,284</div><div class="delta" id="savings">▼ 18.4% vs. baseline</div></div>
+      <div class="card"><div class="metric-label">Avoided peak demand</div><div class="metric" id="peak">420 kW</div><div class="delta">Best window: 02:00–06:00</div></div>
+      <div class="card"><div class="metric-label">Battery state of charge</div><div class="metric" id="soc">72%</div><div class="bar"><span id="socBar" style="width:72%"></span></div></div>
+      <div class="card"><div class="metric-label">Emergency reserve</div><div class="metric" id="reserve">4.2 h</div><div class="delta">Protected minimum: 30%</div></div>
 
       <div class="card wide"><div class="toolbar"><h2>Electricity price &amp; load</h2><button id="replan">Replan schedule</button></div><div class="chart"><canvas id="priceChart"></canvas></div><div class="legend"><span><i class="dot" style="background:var(--amber)"></i>Price ($/MWh)</span><span><i class="dot" style="background:var(--blue)"></i>Grid load (kW)</span></div></div>
       <div class="card wide"><h2>Battery dispatch</h2><div class="chart"><canvas id="batteryChart"></canvas></div><div class="legend"><span><i class="dot" style="background:var(--green)"></i>State of charge</span><span><i class="dot" style="background:var(--blue)"></i>Charge / discharge</span></div></div>
@@ -59,7 +59,38 @@
     const soc=[52,58,64,70,76,82,78,71,65,60,55,50,45,42,46,52,59,65,61,57,54,52,52,52];
     function draw(id, series, colors, max){ const c=document.getElementById(id), r=c.getBoundingClientRect(), d=devicePixelRatio||1; c.width=r.width*d;c.height=r.height*d; const x=c.getContext('2d');x.scale(d,d);const w=r.width,h=r.height,p=22; x.strokeStyle='#243250';x.lineWidth=1; for(let i=0;i<4;i++){const y=p+(h-p*2)*i/3;x.beginPath();x.moveTo(p,y);x.lineTo(w-p,y);x.stroke()} series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=2.5;x.beginPath();arr.forEach((v,i)=>{const xx=p+(w-p*2)*i/(arr.length-1), yy=h-p-(v/max)*(h-p*2);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke()}) }
     function render(){draw('priceChart',[prices,load.map(v=>v/8)],['#f7c873','#70a7ff'],160);draw('batteryChart',[soc],['#5ee6a8'],100)}
-    window.addEventListener('resize',render); render(); document.getElementById('replan').addEventListener('click',e=>{e.target.textContent='Schedule updated';setTimeout(()=>e.target.textContent='Replan schedule',1200)});
+    function rows(result){
+      if(!result || result.error) return [];
+      const first=result[0] || result;
+      const names=(first.schema?.elements || []).map(x=>x.name?.some || x.name || 'field');
+      return (first.rows || []).map(row=>Array.isArray(row) ? Object.fromEntries(names.map((name,i)=>[name,row[i]])) : row);
+    }
+    async function syncSpacetime(){
+      try {
+        const response=await fetch('/state',{cache:'no-store'});
+        if(!response.ok) throw new Error('API unavailable');
+        const state=await response.json();
+        const connected=state.connected;
+        const status=document.getElementById('backendStatus');
+        status.textContent=connected?'● Live · SpacetimeDB connected':'● Demo data · Spacetime not configured';
+        status.style.color=connected?'var(--green)':'var(--amber)';
+        const schedules=rows(state.results?.schedules);
+        const latest=schedules[0];
+        if(latest){
+          document.getElementById('cost').textContent='$'+Number(latest.optimized_cost||0).toLocaleString(undefined,{maximumFractionDigits:0});
+          document.getElementById('savings').textContent='▼ $'+Number(latest.savings||0).toLocaleString(undefined,{maximumFractionDigits:0})+' vs. baseline';
+        }
+        const priceRows=rows(state.results?.prices).sort((a,b)=>(a.slot||0)-(b.slot||0));
+        const demandRows=rows(state.results?.demand).sort((a,b)=>(a.slot||0)-(b.slot||0));
+        if(priceRows.length){ prices.splice(0,prices.length,...priceRows.map(x=>Number(x.price||0))); }
+        if(demandRows.length){ load.splice(0,load.length,...demandRows.map(x=>Number(x.load_kw||0))); }
+        render();
+      } catch (error) {
+        document.getElementById('backendStatus').textContent='● Demo data · start API for live state';
+      }
+    }
+    window.addEventListener('resize',render); render(); syncSpacetime(); setInterval(syncSpacetime,5000);
+    document.getElementById('replan').addEventListener('click',e=>{e.target.textContent='Schedule updated';syncSpacetime();setTimeout(()=>e.target.textContent='Replan schedule',1200)});
   </script>
 </body>
 </html>

@@ -28,3 +28,23 @@ def call_reducer(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
     with urllib.request.urlopen(request, timeout=8) as response:
         body = response.read().decode()
     return json.loads(body) if body else {}
+
+
+def query_sql(query: str) -> Any:
+    """Read a public SpacetimeDB table through its SQL HTTP endpoint."""
+
+    base = os.getenv("SPACETIME_URI")
+    database = os.getenv("SPACETIME_DATABASE")
+    if not base or not database:
+        return None
+    url = f"{base.rstrip('/')}/v1/database/{database}/sql"
+    headers = {"Content-Type": "text/plain"}
+    token = os.getenv("SPACETIME_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, data=query.encode(), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.loads(response.read().decode())
+    except Exception as exc:  # keep the dashboard available when the backend is offline
+        return {"error": str(exc)}

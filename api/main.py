@@ -11,7 +11,7 @@ from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from .spacetime import call_reducer
+from .spacetime import call_reducer, query_sql
 
 
 class FlexibleJob(BaseModel):
@@ -132,7 +132,24 @@ def build_schedule(s: Scenario) -> dict:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "shiftos-api"}
+    connected = query_sql("SELECT * FROM schedule LIMIT 1") is not None
+    return {"status": "ok", "service": "shiftos-api", "spacetime": connected}
+
+
+@app.get("/state")
+def state():
+    """Return the live public Spacetime state for the operator dashboard."""
+    queries = {
+        # SpacetimeDB's SQL surface is intentionally kept to portable SELECTs;
+        # the dashboard sorts the returned rows client-side.
+        "prices": "SELECT * FROM price_signal LIMIT 96",
+        "demand": "SELECT * FROM demand_signal LIMIT 96",
+        "schedules": "SELECT * FROM schedule LIMIT 10",
+        "tasks": "SELECT * FROM task_run LIMIT 20",
+    }
+    results = {name: query_sql(sql) for name, sql in queries.items()}
+    connected = all(value is not None for value in results.values())
+    return {"connected": connected, "database": __import__('os').getenv("SPACETIME_DATABASE"), "results": results}
 
 
 @app.post("/schedule")
