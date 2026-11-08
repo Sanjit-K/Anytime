@@ -1,4 +1,4 @@
-"""Small HTTP API for the ShiftOS scheduling MVP.
+"""HTTP API for ShiftLens workplace memory and archived ShiftOS experiments.
 
 The optimizer is intentionally kept behind ``build_schedule`` so the API can
 be wired to the richer engine package without changing the request contract.
@@ -79,7 +79,11 @@ class TaskResult(BaseModel):
     success: bool = True
 
 
-app = FastAPI(title="ShiftOS API", version="0.2.0", lifespan=demo_runtime.lifespan)
+app = FastAPI(title="ShiftLens API", version="0.3.0")
+
+# ShiftLens shared workplace memory (local HackUTD prototype).
+from .memory import router as memory_router
+app.include_router(memory_router)
 
 
 @app.middleware("http")
@@ -188,7 +192,7 @@ def _engine_scenario(s: Scenario) -> EngineScenario:
 def health():
     result = query_sql("SELECT * FROM schedule LIMIT 1")
     connected = result is not None and not (isinstance(result, dict) and "error" in result)
-    return {"status": "ok", "service": "shiftos-api", "spacetime": connected}
+    return {"status": "ok", "service": "shiftlens-api", "spacetime": connected}
 
 
 @app.get("/state")
