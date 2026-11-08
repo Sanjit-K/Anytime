@@ -42,6 +42,34 @@ function renderMetrics() {
   $("#metric-tools").textContent = new Set(events.filter(event => event.kind === "tool").map(event => event.equipment)).size;
 }
 
+function renderFeeds() {
+  const teamView = state.worker === "all";
+  const workers = teamView ? scenario().workers : [workerById(state.worker)];
+  const grid = $("#feed-grid");
+  grid.classList.toggle("single-feed", !teamView);
+  grid.replaceChildren();
+  $("#feeds-subtitle").textContent = teamView
+    ? "Select a camera slot to view that worker's timeline and search scope."
+    : `${workers[0].name}'s camera slot. No video is connected in this sample workspace.`;
+  $("#feed-count").textContent = `${workers.length} feed${workers.length === 1 ? "" : "s"}`;
+  workers.forEach(worker => {
+    const tile = make(teamView ? "button" : "div", "feed-tile");
+    if (teamView) {
+      tile.type = "button";
+      tile.addEventListener("click", () => selectWorker(worker.id));
+      tile.setAttribute("aria-label", `View ${worker.name}'s camera placeholder and timeline`);
+    }
+    const screen = make("div", "feed-screen");
+    screen.append(make("span", "feed-symbol", "▣"), make("strong", "", "No feed connected"), make("span", "", "Video placeholder"));
+    const meta = make("div", "feed-meta");
+    const identity = make("span", "");
+    identity.append(make("strong", "", worker.name), make("small", "", worker.role));
+    meta.append(identity, make("code", "", `CAM-${worker.id}`));
+    tile.append(screen, meta);
+    grid.append(tile);
+  });
+}
+
 function renderPrompts() {
   const row = $("#prompt-row"); row.replaceChildren();
   scenario().prompts.forEach(prompt => {
@@ -112,7 +140,7 @@ async function runQuery() {
 
 function selectWorker(id) {
   state.worker = id; state.visible = 18;
-  renderWorkers(); renderMetrics(); renderInsights(); renderTimeline();
+  renderWorkers(); renderMetrics(); renderFeeds(); renderInsights(); renderTimeline();
   $("#query-scope").textContent = id === "all" ? "Searching the entire team" : `Searching ${workerById(id).name}'s observations`;
   if ($("#query-input").value.trim()) runQuery();
 }
@@ -125,7 +153,7 @@ function selectScenario(id) {
   $("#scenario-label").textContent = current.title.toUpperCase();
   $("#scenario-title").textContent = `${current.title} memory`;
   $("#scenario-description").textContent = current.subtitle;
-  renderWorkers(); renderMetrics(); renderInsights(); renderTimeline(); renderPrompts();
+  renderWorkers(); renderMetrics(); renderFeeds(); renderInsights(); renderTimeline(); renderPrompts();
   $("#query-scope").textContent = "Searching the entire team";
   queryVersion++;
   $("#query-form button").disabled = false;
