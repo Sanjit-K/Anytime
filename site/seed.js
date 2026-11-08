@@ -178,8 +178,8 @@ function buildScenario(id, title, subtitle, workers, prompts) {
       date: "2026-11-08", source: `Camera ${person.id} · ${event.time}`
     }));
     routineTimes.forEach((time, routineIndex) => observations.push({
-      ...record(time, "routine", person.focus, person.area,
-        `Visual walkthrough of ${person.area} documented ${person.focus}. ${routineIndex === 0 ? "Baseline frame captured for comparison." : routineIndex === 3 ? "End-of-shift frame added to the handoff record." : "Frame kept for comparison with the prior pass."}`),
+      ...record(time, "routine", person.area, person.area,
+        `Visual walkthrough documented general conditions in ${person.area}. ${routineIndex === 0 ? "Baseline frame captured for comparison." : routineIndex === 3 ? "End-of-shift frame added to the handoff record." : "Frame kept for comparison with the prior pass."}`),
       id: `${id === "oil" ? "OR" : "DC"}-${String(index * 10 + routineIndex + 7).padStart(3, "0")}`,
       workerId: person.id, worker: person.name, camera: `CAM-${person.id}`,
       date: "2026-11-08", source: `Camera ${person.id} · ${time}`

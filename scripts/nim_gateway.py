@@ -1,7 +1,9 @@
 """Authenticated, narrow HTTP gateway for the Brev-hosted Anytime Nemotron demo."""
 
 import hmac
+import hashlib
 import os
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,15 +33,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/chat/completions":
             return self.respond(404, b'{"error":"Not found"}')
-        provided = self.headers.get("Authorization", "").removeprefix("Bearer ")
-        if not hmac.compare_digest(provided, TOKEN):
-            return self.respond(401, b'{"error":"Unauthorized"}')
         length = int(self.headers.get("Content-Length", "0"))
         if not 0 < length <= 100_000:
             return self.respond(413, b'{"error":"Request too large"}')
+        body = self.rfile.read(length)
+        timestamp = self.headers.get("X-Anytime-Timestamp", "")
+        signature = self.headers.get("X-Anytime-Signature", "")
+        if not timestamp.isdigit() or abs(time.time() - int(timestamp)) > 60:
+            return self.respond(401, b'{"error":"Unauthorized"}')
+        expected = hmac.new(TOKEN.encode(), timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return self.respond(401, b'{"error":"Unauthorized"}')
         request = urllib.request.Request(
             "http://127.0.0.1:8000/v1/chat/completions",
-            data=self.rfile.read(length),
+            data=body,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",
         )
@@ -53,4 +60,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("0.0.0.0", 8001), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("ANYTIME_NIM_PORT", "8001"))), Handler).serve_forever()

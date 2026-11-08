@@ -1,4 +1,5 @@
 const seed = require("../seed.js");
+const { createHmac } = require("node:crypto");
 
 const stop = new Set(["a", "about", "an", "and", "are", "at", "be", "can", "did", "do", "does", "for", "from", "how", "in", "is", "it", "me", "of", "on", "or", "the", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with", "you"]);
 const synonyms = {
@@ -55,8 +56,10 @@ module.exports = async function handler(req, res) {
   if (!scenario || (workerId !== "all" && !scenario.workers.some(worker => worker.id === workerId))) return send(res, 400, { error: "Select a valid workplace and worker." });
   const endpoint = (process.env.NEMOTRON_ENDPOINT || "https://integrate.api.nvidia.com/v1").replace(/\/+$/, "");
   const key = process.env.NEMOTRON_API_KEY || "";
+  const brevGateway = /^http:\/\/global\.prd\.ga\.run\.brev\.nvidia\.com:\d+\/v1$/.test(endpoint);
   if (!process.env.NEMOTRON_ENDPOINT && !key) return send(res, 503, { error: "Nemotron is not configured on the server yet." });
-  if (!/^https:\/\//.test(endpoint) && !/^http:\/\/127\.0\.0\.1(?::\d+)?(?:\/|$)/.test(endpoint)) return send(res, 500, { error: "Nemotron endpoint configuration is invalid." });
+  if (!/^https:\/\//.test(endpoint) && !brevGateway) return send(res, 500, { error: "Nemotron endpoint configuration is invalid." });
+  if (brevGateway && !key) return send(res, 503, { error: "Nemotron gateway is missing its server secret." });
 
   const observations = scenario.observations.filter(event => workerId === "all" || event.workerId === workerId);
   const evidence = retrieve(question, observations);
@@ -69,10 +72,15 @@ module.exports = async function handler(req, res) {
   ];
   let upstream;
   try {
+    const body = JSON.stringify({ model: process.env.NEMOTRON_MODEL || "nvidia/nemotron-3-nano-30b-a3b", messages, temperature: 0.2, max_tokens: 550, stream: false });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const authHeaders = brevGateway
+      ? { "X-Anytime-Timestamp": timestamp, "X-Anytime-Signature": createHmac("sha256", key).update(`${timestamp}.${body}`).digest("hex") }
+      : key ? { Authorization: `Bearer ${key}` } : {};
     upstream = await fetch(`${endpoint}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify({ model: process.env.NEMOTRON_MODEL || "nvidia/nemotron-3-nano-30b-a3b", messages, temperature: 0.2, max_tokens: 550, stream: false }),
+      headers: { "Content-Type": "application/json", "Accept": "application/json", ...authHeaders },
+      body,
       signal: AbortSignal.timeout(28000),
     });
   } catch (error) {
