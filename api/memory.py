@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import os
 import re
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -65,6 +66,12 @@ class ObservationIn(BaseModel):
 class FrameDescriptionIn(BaseModel):
     frames: list[str] = Field(min_length=1, max_length=5)
     observed_at: Optional[str] = None
+
+
+class FrameIngestIn(FrameDescriptionIn):
+    worker: str = Field(default="Worker 01", max_length=80)
+    area: str = Field(default="Unspecified area", max_length=120)
+    device_id: str = Field(default="shiftlens-pi", max_length=80)
 
 
 def _image_url(value: str) -> str:
@@ -149,6 +156,46 @@ def describe_frame(payload: FrameDescriptionIn):
                 "observed_at": payload.observed_at or datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(502, f"Vision model request failed: {exc}") from exc
+
+
+@router.post("/ingest-frames")
+def ingest_frames(payload: FrameIngestIn, authorization: Optional[str] = Header(default=None)):
+    """Analyze a short sampled clip from a trusted ShiftLens edge device."""
+    expected = os.getenv("SHIFTLENS_INGEST_TOKEN", "")
+    if not expected:
+        raise HTTPException(503, "Set SHIFTLENS_INGEST_TOKEN on the server before enabling Pi ingestion")
+    supplied = authorization.removeprefix("Bearer ") if authorization else ""
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(401, "Invalid ShiftLens device token")
+    described = describe_frame(FrameDescriptionIn(frames=payload.frames, observed_at=payload.observed_at))
+    raw = described["description"].strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
+    try:
+        facts = json.loads(cleaned)
+    except (TypeError, json.JSONDecodeError):
+        facts = {"observation": raw, "objects": [], "area_clues": [], "visible_action": ""}
+    objects = facts.get("objects", [])
+    if isinstance(objects, str):
+        objects = [objects]
+    objects = [str(x).strip() for x in objects if str(x).strip()]
+    clues = facts.get("area_clues", [])
+    if isinstance(clues, str):
+        clues = [clues]
+    observation = str(facts.get("observation", "")).strip()
+    action = str(facts.get("visible_action", "")).strip()
+    note_parts = [part for part in (observation, f"Visible action: {action}" if action and action.lower() not in {"unknown", "cannot determine from one frame"} else "") if part]
+    note = " ".join(note_parts) or "The visual model returned no concise observation; review the attached frame."
+    equipment = ", ".join(objects) if objects else "Unidentified equipment or surroundings"
+    area = payload.area if payload.area != "Unspecified area" else (", ".join(map(str, clues)) or payload.area)
+    result = add_event(ObservationIn(
+        worker=payload.worker, area=area, equipment=equipment, kind="AI visual draft",
+        note=note, confidence=0.5, frame_data_url=payload.frames[-1], observed_at=payload.observed_at,
+    ))
+    result["origin"] = f"ShiftLens camera · {payload.device_id} · AI draft; review required"
+    with _db() as con:
+        con.execute("UPDATE observations SET origin=? WHERE id=?", (result["origin"], result["id"]))
+    return {"event": result, "model": described["model"], "review_required": True,
+            "area_clues": clues, "uncertainty": facts.get("uncertainty", "Model output requires human review")}
 
 
 @router.get("/frames/{name}")

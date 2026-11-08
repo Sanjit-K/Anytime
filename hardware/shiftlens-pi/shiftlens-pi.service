@@ -1,0 +1,21 @@
+[Unit]
+Description=ShiftLens wearable camera observation agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shiftlens
+SupplementaryGroups=video
+EnvironmentFile=/etc/shiftlens/shiftlens-pi.env
+ExecStart=/opt/shiftlens-pi/.venv/bin/python /opt/shiftlens-pi/capture_agent.py
+Restart=on-failure
+RestartSec=4
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run
+
+[Install]
+WantedBy=multi-user.target

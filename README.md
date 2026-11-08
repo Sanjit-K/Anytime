@@ -15,6 +15,8 @@ The current local demo includes:
 - An optional OpenAI-compatible text Nemotron endpoint for evidence-grounded reasoning.
 - Clearly labeled illustrative sample events when the database is first created.
 
+Raspberry Pi edge-agent software is in [`hardware/shiftlens-pi/`](hardware/shiftlens-pi/README.md). It samples USB webcam frames, posts short windows to the protected ingestion API, and keeps audio disabled.
+
 The current prototype does not continuously record video. It samples up to five webcam frames locally and sends them only when a worker requests a visual description. The visual output is a draft, not a verified observation; the worker must review it before saving. It does not identify people, diagnose equipment, or verify that a repair was completed. Sample events are illustrative. Review source footage and follow approved procedures.
 
 ## Run locally
@@ -48,6 +50,7 @@ The VLM endpoint must implement OpenAI-compatible `/chat/completions`. If it is 
 - `POST /memory/events` — save a worker-entered observation and optional captured frame data URL.
 - `POST /memory/ask` — retrieve relevant observations and answer with supporting evidence.
 - `POST /memory/describe-frame` — describe up to five sampled frames through Nemotron VLM.
+- `POST /memory/ingest-frames` — token-protected Pi ingestion, VLM draft, and evidence-frame save.
 - `GET /memory/status` — report memory and model integration status.
 
 ## Design principles
