@@ -72,6 +72,9 @@ def main() -> int:
     camera_index = int(setting("SHIFTLENS_CAMERA_INDEX", "0"))
     camera_source = setting("SHIFTLENS_CAMERA_SOURCE", "usb").lower()
     limelight_url = setting("SHIFTLENS_LIMELIGHT_URL", "http://limelight.local").rstrip("/")
+    limelight_use_cv = setting("SHIFTLENS_LIMELIGHT_USE_CV", "false").lower() in {
+        "1", "true", "yes", "on"
+    }
     try:
         tag_map = json.loads(setting("SHIFTLENS_LIMELIGHT_TAG_MAP", "{}"))
         if not isinstance(tag_map, dict):
@@ -97,18 +100,30 @@ def main() -> int:
     else:
         LOG.error("SHIFTLENS_CAMERA_SOURCE must be 'usb' or 'limelight'.")
         return 2
+    while RUNNING and not camera.isOpened():
+        LOG.warning("Could not open %s; retrying in 5 seconds. Check device IP and network connectivity.", source_label)
+        camera.release()
+        time.sleep(5)
+        if RUNNING:
+            camera = (cv2.VideoCapture(camera_index, cv2.CAP_V4L2) if camera_source == "usb"
+                      else cv2.VideoCapture(f"{limelight_url}:5800", cv2.CAP_FFMPEG))
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if not RUNNING:
+        camera.release()
+        return 0
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    if not camera.isOpened():
-        LOG.error("Could not open %s. Check device IP, stream access, and network connectivity.", source_label)
-        return 3
 
     samples: deque[tuple[str, str]] = deque(maxlen=5)
     last_sample = 0.0
     last_attempt = 0.0
     latest_ll: dict | None = None
     LOG.info("CAMERA ACTIVE · source=%s · audio disabled · device=%s", source_label, device_id)
+    if camera_source == "limelight":
+        LOG.info("Limelight native CV metadata: %s", "enabled" if limelight_use_cv else "disabled (camera-only)")
     LOG.info("At most five JPEG frames remain in RAM; they are sent only to %s", api_ingest)
 
     try:
@@ -129,7 +144,7 @@ def main() -> int:
                     data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii")
                     timestamp = datetime.now(timezone.utc).isoformat()
                     samples.append((timestamp, data_url))
-                    if camera_source == "limelight":
+                    if camera_source == "limelight" and limelight_use_cv:
                         latest_ll = limelight_results(limelight_url)
                 last_sample = now
 
@@ -141,7 +156,7 @@ def main() -> int:
                     "area": area,
                     "device_id": device_id,
                 }
-                if camera_source == "limelight":
+                if camera_source == "limelight" and limelight_use_cv:
                     latest_ll = limelight_results(limelight_url) or latest_ll
                     if latest_ll:
                         payload["limelight_results"] = latest_ll

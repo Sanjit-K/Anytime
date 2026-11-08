@@ -1,8 +1,8 @@
-# ShiftLens Raspberry Pi camera agent
+# Anytime Raspberry Pi camera agent
 
-This edge agent targets a Raspberry Pi 5 (Pi 4 should also work) with either a USB/UVC webcam or a Limelight 3A. It samples five still frames at one-second intervals into a RAM-only buffer, submits that short sequence to the ShiftLens API on the Mac every 15 seconds, and then discards the successful batch. The API asks Nemotron Nano 12B v2 VL for a structured observation draft, attaches the latest frame, and adds it to the shared timeline. The worker must review AI drafts.
+This edge agent targets a Raspberry Pi 5 (Pi 4 should also work) with either a USB/UVC webcam or a Limelight 3A. It samples five still frames at one-second intervals into a RAM-only buffer, submits that short sequence to the Anytime API on the Mac every 15 seconds, and then discards the successful batch. The API asks Nemotron Nano 12B v2 VL for a structured observation draft, attaches the latest frame, and adds it to the shared timeline. If Nemotron is unavailable, the frame and received Limelight pose are still stored for manual review.
 
-In Limelight mode the Pi reads the camera stream on port `5800` and polls the JSON results API on port `5807`. ShiftLens records a small allowlisted subset of object detections, AprilTag IDs, and barcodes with the observation. AprilTag IDs can optionally map to named areas, such as `{"1":"Pump Bay A"}`. Limelight outputs are treated as hints and checked against the sampled frames by the VLM; they are not proof of a condition or action. Configure the Limelight pipeline in its web UI first. Use its built-in detector/AprilTag pipelines for the demo; custom SnapScript is optional and isn't required by this agent.
+In Limelight mode the Pi reads the camera stream on port `5800` and can poll the JSON results API on port `5807`. Set `SHIFTLENS_LIMELIGHT_USE_CV=true` to send AprilTag and botpose results with sampled frames. Limelight must have its camera mount pose and a matching field map configured in its web interface before it reports a useful field-space botpose. Limelight outputs are not proof of a condition or action.
 
 Audio is not captured. The Pi does not save video to disk. On a network error, only the most recent five frames stay in memory for retry. Do not expose the unauthenticated dashboard/API to the public internet; device ingestion uses a shared bearer token.
 
@@ -16,14 +16,14 @@ sudo ./install.sh
 sudo nano /etc/shiftlens/shiftlens-pi.env
 ```
 
-Set `SHIFTLENS_API_URL` to the Mac's IP address on the same trusted Wi-Fi or personal hotspot. Set `SHIFTLENS_INGEST_TOKEN` to the same random token configured on the Mac. For a Limelight, set `SHIFTLENS_CAMERA_SOURCE=limelight` and `SHIFTLENS_LIMELIGHT_URL` to its host/IP, without a port. Optionally map known AprilTag IDs using `SHIFTLENS_LIMELIGHT_TAG_MAP` (a JSON object). Keep the file private (`0600`). Then run:
+Set `SHIFTLENS_API_URL` to the Mac's IP address on the same trusted Wi-Fi or personal hotspot. Set `SHIFTLENS_INGEST_TOKEN` to the same random token configured on the Mac. Give every physical camera a unique `SHIFTLENS_DEVICE_ID` and set `SHIFTLENS_WORKER` to the employee wearing/using it; use the same device ID when registering it in the dashboard. Multiple devices can point at the same API. For a Limelight, set `SHIFTLENS_CAMERA_SOURCE=limelight`, `SHIFTLENS_LIMELIGHT_URL` to its host/IP without a port, and `SHIFTLENS_LIMELIGHT_USE_CV=true`. Keep the file private (`0600`). Then run:
 
 ```bash
 sudo systemctl enable --now shiftlens-pi
 journalctl -u shiftlens-pi -f
 ```
 
-The service starts at boot. It logs when camera sampling is active and reports observation IDs, but never logs image contents or the token.
+The service starts at boot. It logs when camera sampling is active and reports observation IDs, but never logs image contents or the token. The Team timeline combines events from all devices and can filter by employee or camera ID.
 
 ## Mac side
 
@@ -46,4 +46,16 @@ Forward the Brev NIM port to Mac port 8001. A personal hotspot is often simpler 
 
 ## Settings
 
-See `shiftlens-pi.env.example`. `SHIFTLENS_ANALYZE_EVERY_SECONDS` controls request cadence (minimum 5 seconds); `SHIFTLENS_SAMPLE_EVERY_SECONDS` defaults to 1 second. Each VLM response is a draft and Limelight detections can be wrong; review them in the ShiftLens dashboard. USB webcam mode remains the default.
+See `shiftlens-pi.env.example`. `SHIFTLENS_ANALYZE_EVERY_SECONDS` controls request cadence (minimum 5 seconds); `SHIFTLENS_SAMPLE_EVERY_SECONDS` defaults to 1 second. Each VLM response is a draft and Limelight detections can be wrong; review them in the Anytime dashboard. USB webcam mode remains the default.
+
+### Example for a second employee camera
+
+Use a separate Pi/service installation and set unique values such as:
+
+```dotenv
+SHIFTLENS_WORKER=Worker 02
+SHIFTLENS_DEVICE_ID=worker-02-chest-camera
+SHIFTLENS_API_URL=http://<mac-lan-ip>:8000
+```
+
+Keep the API URL and ingest token shared for this prototype. Each event is indexed by both the worker and device so the UI can show the combined timeline or either individual stream.

@@ -1,4 +1,4 @@
-"""HTTP API for ShiftLens workplace memory and archived ShiftOS experiments.
+"""HTTP API for Anytime workplace memory and archived ShiftOS experiments.
 
 The optimizer is intentionally kept behind ``build_schedule`` so the API can
 be wired to the richer engine package without changing the request contract.
@@ -79,7 +79,7 @@ class TaskResult(BaseModel):
     success: bool = True
 
 
-app = FastAPI(title="ShiftLens API", version="0.3.0")
+app = FastAPI(title="Anytime API", version="0.3.0")
 
 # ShiftLens shared workplace memory (local HackUTD prototype).
 from .memory import router as memory_router

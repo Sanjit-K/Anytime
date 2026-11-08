@@ -1,23 +1,6 @@
-# ShiftLens
+# Anytime
 
-**A shared, evidence-backed memory for industrial shift teams.**
-
-ShiftLens turns observations made during a shift into a searchable team timeline. Workers can ask where a tool was last seen, what was observed around a piece of equipment, or what the previous shift tried. Answers link back to the observations and source frames they use.
-
-## HackUTD prototype
-
-The current local demo includes:
-
-- A persistent SQLite observation timeline shared by browser sessions on this machine.
-- Optional still-frame capture from a browser camera, attached to a worker-entered observation.
-- Search and question answering with supporting observation links.
-- Sampled webcam frames analyzed by NVIDIA Nemotron Nano 12B v2 VL when its vision endpoint is configured.
-- An optional OpenAI-compatible text Nemotron endpoint for evidence-grounded reasoning.
-- Clearly labeled illustrative sample events when the database is first created.
-
-Raspberry Pi edge-agent software is in [`hardware/shiftlens-pi/`](hardware/shiftlens-pi/README.md). It samples USB webcam frames, posts short windows to the protected ingestion API, and keeps audio disabled.
-
-The current prototype does not continuously record video. It samples up to five webcam frames locally and sends them only when a worker requests a visual description. The visual output is a draft, not a verified observation; the worker must review it before saving. It does not identify people, diagnose equipment, or verify that a repair was completed. Sample events are illustrative. Review source footage and follow approved procedures.
+Anytime is a shared, evidence-backed memory for industrial work teams. Camera agents add time-stamped observations and source frames. Workers can search the combined shift history, review individual camera timelines, label tools for a local YOLO detector, and inspect Limelight AprilTag pose data on a floor map.
 
 ## Run locally
 
@@ -25,42 +8,51 @@ The current prototype does not continuously record video. It samples up to five 
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Camera capture requires localhost or HTTPS and browser permission. Observation metadata and captured frames are stored locally in `data/`.
+Open `http://127.0.0.1:8000`. Set an ingestion bearer token and optional Nemotron endpoint in the server environment:
 
-## Optional Nemotron endpoint
+```dotenv
+SHIFTLENS_INGEST_TOKEN=<long-random-token>
+NEMOTRON_VISION_ENDPOINT=http://127.0.0.1:8001/v1
+NEMOTRON_VISION_MODEL=nvidia/nemotron-nano-12b-v2-vl
+```
 
-The recommended visual observer is `nvidia/nemotron-nano-12b-v2-vl` served by NVIDIA NIM 1.6.0. The helper in `scripts/setup_brev_nemotron.sh` installs that VLM on the Brev GPU machine. The UI keeps at most five one-second-spaced camera frames in the browser and sends them only when the worker requests a description. Nemotron returns a draft; the worker reviews it before saving.
+If Nemotron is offline, camera frames and AprilTag poses are still saved; the observation is marked as needing manual review. Text questions fall back to evidence retrieval.
 
-Set the vision endpoint base URL and model in the server environment:
+## Connect cameras
+
+In **Cameras**, register a camera ID and worker. A Limelight can use its LAN MJPEG stream URL (typically `http://limelight.local:5800`) for preview and connection checks. For Raspberry Pi cameras, install [`hardware/shiftlens-pi/`](hardware/shiftlens-pi/README.md), set a unique `SHIFTLENS_DEVICE_ID` and worker name, and point it at this API with the ingestion token. For Limelight capture, set `SHIFTLENS_CAMERA_SOURCE=limelight` and `SHIFTLENS_LIMELIGHT_USE_CV=true` so the edge agent also uploads native AprilTag/pose results.
+
+Every camera ID should match its edge agent's device ID. Each upload is indexed by worker and camera for an overall feed or an individual timeline. SQLite, frames, labeled samples, and trained weights stay in the local `data/` directory.
+
+## AprilTag location and item estimates
+
+The **Map & location** view stores site dimensions and tag anchor coordinates. Configure the same tag map and camera mount pose in the Limelight web interface. Limelight only emits a field-space `botpose` after its camera-to-robot mount pose and AprilTag field map are set. Anytime records that pose and applies the per-camera map translation/rotation. Set the Anytime map offsets to align Limelight's field origin to the floor plan.
+
+The map's green markers are Limelight camera poses; for a wearable camera, this approximates the worker's position. Blue item markers are rough monocular estimates that require a trained detector, known object width, camera horizontal FOV, and a current Limelight pose. The UI shows an uncertainty radius; these are not precision measurements and can be wrong when the object is tilted, occluded, or not at the assumed depth.
+
+## Train a tool detector
+
+Install the optional detector dependencies:
 
 ```bash
-export NEMOTRON_VISION_ENDPOINT=http://127.0.0.1:8001/v1
-export NEMOTRON_VISION_MODEL=nvidia/nemotron-nano-12b-v2-vl
-python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+pip install -r vision-requirements.txt
 ```
 
-The VLM endpoint must implement OpenAI-compatible `/chat/completions`. If it is unavailable, frame descriptions stay disabled; the worker can still save typed observations. If a separate `NEMOTRON_ENDPOINT` is configured, it is used for cross-observation text reasoning. Otherwise, ShiftLens uses evidence retrieval and an extractive local fallback.
+In **Tool detector**, upload varied images for each class and draw a box around each visible item. Save boxes, then start training. Training runs locally with Ultralytics YOLO and writes weights under `data/tool_models/`. At least five labeled images are required by the current training job; more varied images per class will improve results. The active model is applied to later Pi uploads.
 
-To send a synthetic five-frame tool-placement sequence through the VLM route, run `python -m pip install pillow && python scripts/test_shiftlens_vlm.py`. This requires the Brev VLM and local API to be running.
+## API overview
 
-## API
+- `POST /memory/cameras`, `GET /memory/cameras`, `POST /memory/cameras/{id}/check` — register and check cameras.
+- `GET /memory/events`, `POST /memory/events`, `POST /memory/ask` — shared events, manual events, and evidence-grounded questions.
+- `POST /memory/ingest-frames` — token-protected Pi ingestion, optional Limelight results, observations, frame storage, and detector estimates.
+- `GET /memory/map`, `PUT /memory/map` — floor plan and AprilTag anchors.
+- `GET/POST /memory/tools/samples`, `PUT /memory/tools/samples/{id}/boxes`, `PUT /memory/tools/classes` — image collection and annotations.
+- `POST /memory/tools/train`, `GET /memory/tools/train-status`, `POST /memory/tools/detect` — YOLO training and inference.
+- `POST /memory/describe-frame`, `GET /memory/status` — Nemotron visual description and service status.
 
-- `GET /memory/events` — list observations.
-- `POST /memory/events` — save a worker-entered observation and optional captured frame data URL.
-- `POST /memory/ask` — retrieve relevant observations and answer with supporting evidence.
-- `POST /memory/describe-frame` — describe up to five sampled frames through Nemotron VLM.
-- `POST /memory/ingest-frames` — token-protected Pi ingestion, VLM draft, and evidence-frame save.
-- `GET /memory/status` — report memory and model integration status.
+## Limitations
 
-## Design principles
-
-- Keep answers traceable to observations and frames.
-- Separate what a camera visibly captured from what a worker inferred.
-- Show uncertainty and ask for human review on maintenance questions.
-- Capture only with worker consent and site approval; use access controls and retention limits before any real deployment.
-- Do not use the prototype to issue safety-critical commands or to evaluate worker performance.
-
-The previous ShiftOS energy-arbitrage prototype remains in Git history while this branch pivots to ShiftLens.
+The current prototype uses one local SQLite database and a shared device token. Use a trusted LAN. A Limelight pose is only meaningful after its map and mount calibration are configured. Video observations are drafts that require human review; do not use Anytime to issue safety-critical instructions or assess employee performance.

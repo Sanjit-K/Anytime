@@ -1,0 +1,2 @@
+# Optional local detector used by the CV-first task monitor.
+ultralytics==8.2.66
