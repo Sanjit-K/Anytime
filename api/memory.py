@@ -62,6 +62,24 @@ class ObservationIn(BaseModel):
     observed_at: Optional[str] = None
 
 
+class FrameDescriptionIn(BaseModel):
+    frames: list[str] = Field(min_length=1, max_length=5)
+    observed_at: Optional[str] = None
+
+
+def _image_url(value: str) -> str:
+    match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)", value)
+    if not match:
+        raise HTTPException(400, "Frame must be a PNG, JPEG, or WebP data URL")
+    try:
+        data = base64.b64decode(match.group(2), validate=True)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid base64 frame") from exc
+    if len(data) > 8_000_000:
+        raise HTTPException(413, "Frame exceeds 8 MB")
+    return value
+
+
 def _event(row: sqlite3.Row) -> dict:
     item = dict(row)
     item["frame_url"] = f"/memory/frames/{item.pop('frame')}" if item.get("frame") else None
@@ -80,12 +98,9 @@ def events(limit: int = 100):
 def add_event(item: ObservationIn):
     frame_name = None
     if item.frame_data_url:
-        match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)", item.frame_data_url)
-        if not match:
-            raise HTTPException(400, "Frame must be a PNG, JPEG, or WebP data URL")
+        image_url = _image_url(item.frame_data_url)
+        match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)", image_url)
         data = base64.b64decode(match.group(2), validate=True)
-        if len(data) > 8_000_000:
-            raise HTTPException(413, "Frame exceeds 8 MB")
         FRAMES.mkdir(parents=True, exist_ok=True)
         suffix = {"jpeg": "jpg"}.get(match.group(1), match.group(1))
         frame_name = f"{uuid.uuid4().hex}.{suffix}"
@@ -98,6 +113,42 @@ def add_event(item: ObservationIn):
             item.kind.strip(), item.note.strip(), item.confidence, frame_name, "captured by worker"))
         row = con.execute("SELECT * FROM observations WHERE id=?", (event_id,)).fetchone()
     return _event(row)
+
+
+@router.post("/describe-frame")
+def describe_frame(payload: FrameDescriptionIn):
+    endpoint = os.getenv("NEMOTRON_VISION_ENDPOINT", "").strip().rstrip("/")
+    if not endpoint:
+        raise HTTPException(503, "Vision endpoint is not configured")
+    url = endpoint if endpoint.endswith("/chat/completions") else endpoint + "/chat/completions"
+    model = os.getenv("NEMOTRON_VISION_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
+    images = [_image_url(frame) for frame in payload.frames]
+    prompt = (
+        f"These are {len(images)} ordered frames sampled from one worker-camera moment. "
+        "Describe only what is visibly supported across the frames. "
+        "Return JSON with keys: objects (array of visible tools/equipment), area_clues (array), "
+        "visible_action (short description of changes/actions visible across frames; if only one frame, "
+        "say 'cannot determine from one frame'), observation (short factual sentence), uncertainty (string). "
+        "Do not infer identity, intent, "
+        "repair completion, hazard severity, or safe operating state. Mark obscured details as unknown."
+    )
+    content = [{"type": "text", "text": prompt}]
+    for index, image in enumerate(images, 1):
+        content.extend([{"type": "text", "text": f"Frame {index} in time order."},
+                        {"type": "image_url", "image_url": {"url": image}}])
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": content}],
+                       "temperature": 0.1, "max_tokens": 350}).encode()
+    try:
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as response:
+            data = json.loads(response.read())
+        text = data["choices"][0]["message"]["content"]
+        if isinstance(text, list):
+            text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+        return {"description": str(text).strip(), "model": model, "review_required": True,
+                "observed_at": payload.observed_at or datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        raise HTTPException(502, f"Vision model request failed: {exc}") from exc
 
 
 @router.get("/frames/{name}")
@@ -159,4 +210,8 @@ def ask(payload: dict):
 
 @router.get("/status")
 def status():
-    return {"service": "ShiftLens local workplace memory", "storage": "local SQLite", "nemotron_configured": bool(os.getenv("NEMOTRON_ENDPOINT")), "vision_extraction": False, "note": "Observations are worker-entered or illustrative demo seeds; frame capture is separate from AI interpretation."}
+    return {"service": "ShiftLens local workplace memory", "storage": "local SQLite",
+            "nemotron_configured": bool(os.getenv("NEMOTRON_ENDPOINT")),
+            "vision_configured": bool(os.getenv("NEMOTRON_VISION_ENDPOINT")),
+            "vision_model": os.getenv("NEMOTRON_VISION_MODEL", "nvidia/nemotron-nano-12b-v2-vl"),
+            "note": "Vision descriptions are drafts from sampled frames and require worker review."}
