@@ -44,6 +44,8 @@ python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 
 The VLM endpoint must implement OpenAI-compatible `/chat/completions`. If it is unavailable, frame descriptions stay disabled; the worker can still save typed observations. If a separate `NEMOTRON_ENDPOINT` is configured, it is used for cross-observation text reasoning. Otherwise, ShiftLens uses evidence retrieval and an extractive local fallback.
 
+To send a synthetic five-frame tool-placement sequence through the VLM route, run `python -m pip install pillow && python scripts/test_shiftlens_vlm.py`. This requires the Brev VLM and local API to be running.
+
 ## API
 
 - `GET /memory/events` — list observations.
