@@ -189,7 +189,7 @@ function buildScenario(id, title, subtitle, workers, prompts) {
   return { id, title, subtitle, workers: workers.map(({events, ...person}) => person), observations, prompts };
 }
 
-window.ANYTIME_SEED = {
+const ANYTIME_SEED = {
   oil: buildScenario("oil", "Oil rig", "Maintenance, tools, safety and shift handoffs across a working rig.", oilWorkers, [
     "Why is Pump B still leaking?", "Where is the torque wrench?", "What changed at Valve V14?", "What does the next shift need to know?"
   ]),
@@ -197,3 +197,5 @@ window.ANYTIME_SEED = {
     "Why was Rack D12 warm?", "Who worked on UPS B?", "Where is the fan tray puller?", "What is unresolved at handoff?"
   ])
 };
+if (typeof window !== "undefined") window.ANYTIME_SEED = ANYTIME_SEED;
+if (typeof module !== "undefined") module.exports = ANYTIME_SEED;

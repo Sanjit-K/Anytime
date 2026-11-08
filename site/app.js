@@ -1,14 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const seed = window.ANYTIME_SEED;
 const state = { scenario: "oil", worker: "all", type: "all", visible: 18 };
-const stopWords = new Set(["the", "a", "an", "to", "of", "in", "on", "at", "is", "was", "were", "are", "did", "do", "does", "what", "which", "how", "why", "can", "you", "me", "about", "this", "that", "there", "with", "after", "before", "from", "for", "have", "has", "who", "where", "when"]);
-const synonyms = {
-  warm: ["temperature", "airflow", "fan", "cooling", "inlet"], hot: ["temperature", "airflow", "fan", "cooling"],
-  leak: ["fluid", "coupling", "seal"], leaking: ["fluid", "coupling", "seal"],
-  lost: ["tool", "last", "returned"], find: ["tool", "last", "returned"],
-  broken: ["issue", "warning", "open"], changed: ["change", "adjusted", "replaced"],
-  handoff: ["handoff", "open", "next"], shift: ["handoff", "open", "next"]
-};
+let queryVersion = 0;
 
 function scenario() { return seed[state.scenario]; }
 function scopedEvents() { return scenario().observations.filter(event => state.worker === "all" || event.workerId === state.worker); }
@@ -93,62 +86,28 @@ function renderTimeline() {
   $("#timeline-subtitle").textContent = `${events.length} observations in this view, newest first.`;
 }
 
-function terms(question) {
-  const basic = (question.toLowerCase().match(/[a-z0-9]+/g) || []).filter(word => word.length > 1 && !stopWords.has(word));
-  return [...new Set([...basic, ...basic.flatMap(word => synonyms[word] || [])])];
-}
-
-function rank(event, words, question) {
-  const equipment = event.equipment.toLowerCase(), note = event.note.toLowerCase(), area = event.area.toLowerCase(), worker = event.worker.toLowerCase();
-  let score = 0;
-  words.forEach(word => { if (equipment.includes(word)) score += 7; if (note.includes(word)) score += 2; if (area.includes(word)) score += 2; if (worker.includes(word)) score += 4; if (event.kind.includes(word)) score += 2; });
-  if (/where|last seen|find/i.test(question) && event.kind === "tool" && score > 0) score += 7;
-  if (/unresolved|open|handoff/i.test(question) && event.state === "open") score += 6;
-  if (/changed|replaced|adjusted/i.test(question) && event.kind === "change") score += 4;
-  if (event.kind === "routine") score = Math.max(0, score - 8);
-  return score;
-}
-
-function answerFor(question, results, events) {
-  const lower = question.toLowerCase();
-  const first = results[0];
-  if (!first) return "No matching observations were found in this sample shift. Try an asset, worker, tool, or location name.";
-  if (/where|last seen|find/i.test(lower)) {
-    const tool = results.find(item => item.kind === "tool") || first;
-    const latest = events.find(item => item.kind === "tool" && item.equipment === tool.equipment) || tool;
-    return `The latest record for ${latest.equipment} places it at ${latest.area} at ${latest.time}. ${latest.note}`;
-  }
-  if (/who/i.test(lower)) {
-    const names = [...new Set(results.map(item => item.worker))].slice(0, 4);
-    return `${names.join(", ")} appear in the matching records. Their observations below show what each person documented.`;
-  }
-  if (/unresolved|open|handoff/i.test(lower)) {
-    const open = results.filter(item => item.state === "open");
-    if (open.length) return `${open.length} relevant open record${open.length === 1 ? "" : "s"} appear in this result. The latest says: ${open[0].note}`;
-  }
-  if (state.worker === "all" && state.scenario === "oil" && /pump\s*b/i.test(lower) && /leak|fluid|why/i.test(lower)) {
-    return "Fluid remained visible near Pump B after an observed coupling adjustment. The records do not confirm that the repair was completed; the issue was carried into the next shift.";
-  }
-  if (state.worker === "all" && state.scenario === "datacenter" && /rack\s*d12|\bd12\b/i.test(lower) && /warm|hot|temperature|why/i.test(lower)) {
-    return "The records show a fan tray warning and a cold aisle obstruction near D12. After the tray replacement and aisle clearance, the inlet display fell from 31.2 C to 28.7 C; the team kept monitoring it.";
-  }
-  return `The closest matching observation is from ${first.worker} at ${first.time}: ${first.note}`;
-}
-
-function runQuery() {
+async function runQuery() {
   const question = $("#query-input").value.trim(); if (!question) return;
-  const events = scopedEvents(), words = terms(question);
-  const candidateEvents = /unresolved|open|handoff/i.test(question)
-    ? [...new Map([...openEvents(events), ...events.filter(event => event.kind === "handoff")].map(event => [event.id, event])).values()]
-    : events;
-  const ranked = candidateEvents.map(event => ({ event, score: rank(event, words, question) })).filter(result => result.score > 0).sort((a, b) => b.score - a.score || b.event.time.localeCompare(a.event.time));
-  const results = ranked.slice(0, 5).map(result => result.event);
+  const version = ++queryVersion;
   const container = $("#query-result"); container.replaceChildren();
-  container.append(make("p", "overline", `SEARCH RESULT · ${ranked.length} MATCHING RECORD${ranked.length === 1 ? "" : "S"}`), make("h3", "", answerFor(question, results, events)));
-  container.append(make("p", "result-sub", state.worker === "all" ? `Searching all ${scenario().workers.length} workers` : `Searching ${workerById(state.worker).name}'s records`));
-  const list = make("div", "evidence-list");
-  results.forEach(event => { const row = make("div", "evidence-row"); row.append(make("div", "evidence-top", `${event.id}  /  ${event.time}  /  ${event.worker}`), make("p", "", event.note)); list.append(row); });
-  container.append(list);
+  container.append(make("p", "overline", "ASKING NVIDIA NEMOTRON"), make("h3", "", "Retrieving relevant shift records and reasoning over them…"));
+  const button = $("#query-form button"); button.disabled = true;
+  try {
+    const response = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, scenario: state.scenario, workerId: state.worker }) });
+    const data = await response.json();
+    if (version !== queryVersion) return;
+    if (!response.ok) throw new Error(data.error || "Nemotron could not answer right now.");
+    container.replaceChildren(make("p", "overline", `${data.engine.toUpperCase()} · ${data.evidence.length} SOURCE RECORD${data.evidence.length === 1 ? "" : "S"}`), make("h3", "", data.answer));
+    container.append(make("p", "result-sub", state.worker === "all" ? `Across all ${scenario().workers.length} workers` : `From ${workerById(state.worker).name}'s records`));
+    const list = make("div", "evidence-list");
+    data.evidence.forEach(event => { const row = make("div", "evidence-row"); row.append(make("div", "evidence-top", `${event.id}  /  ${event.time}  /  ${event.worker}`), make("p", "", event.note)); list.append(row); });
+    container.append(list);
+  } catch (error) {
+    if (version !== queryVersion) return;
+    container.replaceChildren(make("p", "overline", "NEMOTRON UNAVAILABLE"), make("h3", "", error.message));
+  } finally {
+    if (version === queryVersion) button.disabled = false;
+  }
 }
 
 function selectWorker(id) {
@@ -168,7 +127,10 @@ function selectScenario(id) {
   $("#scenario-description").textContent = current.subtitle;
   renderWorkers(); renderMetrics(); renderInsights(); renderTimeline(); renderPrompts();
   $("#query-scope").textContent = "Searching the entire team";
-  $("#query-input").value = current.prompts[0]; runQuery();
+  queryVersion++;
+  $("#query-form button").disabled = false;
+  $("#query-input").value = "";
+  $("#query-result").replaceChildren(make("p", "result-sub", "Ask Nemotron about a tool, asset, worker, or shift handoff."));
 }
 
 document.querySelectorAll("[data-scenario]").forEach(button => button.addEventListener("click", () => selectScenario(button.dataset.scenario)));
