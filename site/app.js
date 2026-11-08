@@ -102,9 +102,10 @@ function rank(event, words, question) {
   const equipment = event.equipment.toLowerCase(), note = event.note.toLowerCase(), area = event.area.toLowerCase(), worker = event.worker.toLowerCase();
   let score = 0;
   words.forEach(word => { if (equipment.includes(word)) score += 7; if (note.includes(word)) score += 2; if (area.includes(word)) score += 2; if (worker.includes(word)) score += 4; if (event.kind.includes(word)) score += 2; });
-  if (/where|last seen|find/i.test(question) && event.kind === "tool") score += 7;
+  if (/where|last seen|find/i.test(question) && event.kind === "tool" && score > 0) score += 7;
   if (/unresolved|open|handoff/i.test(question) && event.state === "open") score += 6;
   if (/changed|replaced|adjusted/i.test(question) && event.kind === "change") score += 4;
+  if (event.kind === "routine") score = Math.max(0, score - 8);
   return score;
 }
 
@@ -125,10 +126,10 @@ function answerFor(question, results, events) {
     const open = results.filter(item => item.state === "open");
     if (open.length) return `${open.length} relevant open record${open.length === 1 ? "" : "s"} appear in this result. The latest says: ${open[0].note}`;
   }
-  if (state.scenario === "oil" && /pump\s*b/i.test(lower) && /leak|fluid|why/i.test(lower)) {
+  if (state.worker === "all" && state.scenario === "oil" && /pump\s*b/i.test(lower) && /leak|fluid|why/i.test(lower)) {
     return "Fluid remained visible near Pump B after an observed coupling adjustment. The records do not confirm that the repair was completed; the issue was carried into the next shift.";
   }
-  if (state.scenario === "datacenter" && /rack\s*d12|\bd12\b/i.test(lower) && /warm|hot|temperature|why/i.test(lower)) {
+  if (state.worker === "all" && state.scenario === "datacenter" && /rack\s*d12|\bd12\b/i.test(lower) && /warm|hot|temperature|why/i.test(lower)) {
     return "The records show a fan tray warning and a cold aisle obstruction near D12. After the tray replacement and aisle clearance, the inlet display fell from 31.2 C to 28.7 C; the team kept monitoring it.";
   }
   return `The closest matching observation is from ${first.worker} at ${first.time}: ${first.note}`;
