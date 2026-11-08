@@ -11,7 +11,7 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -31,8 +31,12 @@ def _db() -> sqlite3.Connection:
     con.execute("""CREATE TABLE IF NOT EXISTS observations (
       id TEXT PRIMARY KEY, observed_at TEXT NOT NULL, worker TEXT NOT NULL,
       area TEXT NOT NULL, equipment TEXT NOT NULL, kind TEXT NOT NULL,
-      note TEXT NOT NULL, confidence REAL NOT NULL, frame TEXT, origin TEXT NOT NULL
+      note TEXT NOT NULL, confidence REAL NOT NULL, frame TEXT, origin TEXT NOT NULL,
+      source_data_json TEXT
     )""")
+    columns = {row[1] for row in con.execute("PRAGMA table_info(observations)")}
+    if "source_data_json" not in columns:
+        con.execute("ALTER TABLE observations ADD COLUMN source_data_json TEXT")
     if con.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 0:
         examples = [
           ("Worker 03", "Pump Bay B", "Pump B", "condition", "A small fluid patch was visible beneath the Pump B coupling during the walkaround.", .91),
@@ -45,9 +49,9 @@ def _db() -> sqlite3.Connection:
         for offset, row in enumerate(examples):
             worker, area, equipment, kind, note, confidence = row
             observed = (now - timedelta(minutes=(len(examples) - offset) * 17)).replace(microsecond=0)
-            con.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            con.execute("INSERT INTO observations (id,observed_at,worker,area,equipment,kind,note,confidence,frame,origin,source_data_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
                 f"demo-{offset+1}", observed.isoformat(), worker,
-                area, equipment, kind, note, confidence, None, "illustrative demo data"))
+                area, equipment, kind, note, confidence, None, "illustrative demo data", None))
         con.commit()
     return con
 
@@ -66,12 +70,14 @@ class ObservationIn(BaseModel):
 class FrameDescriptionIn(BaseModel):
     frames: list[str] = Field(min_length=1, max_length=5)
     observed_at: Optional[str] = None
+    limelight_hints: Optional[dict[str, Any]] = None
 
 
 class FrameIngestIn(FrameDescriptionIn):
     worker: str = Field(default="Worker 01", max_length=80)
     area: str = Field(default="Unspecified area", max_length=120)
     device_id: str = Field(default="shiftlens-pi", max_length=80)
+    limelight_results: Optional[dict[str, Any]] = None
 
 
 def _image_url(value: str) -> str:
@@ -90,6 +96,11 @@ def _image_url(value: str) -> str:
 def _event(row: sqlite3.Row) -> dict:
     item = dict(row)
     item["frame_url"] = f"/memory/frames/{item.pop('frame')}" if item.get("frame") else None
+    source = item.pop("source_data_json", None)
+    try:
+        item["source_data"] = json.loads(source) if source else None
+    except (TypeError, json.JSONDecodeError):
+        item["source_data"] = None
     return item
 
 
@@ -115,9 +126,9 @@ def add_event(item: ObservationIn):
     event_id = uuid.uuid4().hex
     observed = item.observed_at or datetime.now(timezone.utc).isoformat()
     with _db() as con:
-        con.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?)", (
+        con.execute("INSERT INTO observations (id,observed_at,worker,area,equipment,kind,note,confidence,frame,origin,source_data_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
             event_id, observed, item.worker.strip(), item.area.strip(), item.equipment.strip(),
-            item.kind.strip(), item.note.strip(), item.confidence, frame_name, "captured by worker"))
+            item.kind.strip(), item.note.strip(), item.confidence, frame_name, "captured by worker", None))
         row = con.execute("SELECT * FROM observations WHERE id=?", (event_id,)).fetchone()
     return _event(row)
 
@@ -130,6 +141,9 @@ def describe_frame(payload: FrameDescriptionIn):
     url = endpoint if endpoint.endswith("/chat/completions") else endpoint + "/chat/completions"
     model = os.getenv("NEMOTRON_VISION_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
     images = [_image_url(frame) for frame in payload.frames]
+    hints = payload.limelight_hints
+    hint_text = ("\nLimelight machine-vision detections (unverified hints; verify against images): "
+                 + json.dumps(hints, ensure_ascii=True)[:4000]) if hints else ""
     prompt = (
         f"These are {len(images)} ordered frames sampled from one worker-camera moment. "
         "Describe only what is visibly supported across the frames. "
@@ -138,6 +152,7 @@ def describe_frame(payload: FrameDescriptionIn):
         "say 'cannot determine from one frame'), observation (short factual sentence), uncertainty (string). "
         "Do not infer identity, intent, "
         "repair completion, hazard severity, or safe operating state. Mark obscured details as unknown."
+        + hint_text
     )
     content = [{"type": "text", "text": prompt}]
     for index, image in enumerate(images, 1):
@@ -167,7 +182,9 @@ def ingest_frames(payload: FrameIngestIn, authorization: Optional[str] = Header(
     supplied = authorization.removeprefix("Bearer ") if authorization else ""
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(401, "Invalid ShiftLens device token")
-    described = describe_frame(FrameDescriptionIn(frames=payload.frames, observed_at=payload.observed_at))
+    ll = _limelight_summary(payload.limelight_results or {}) if payload.limelight_results else None
+    described = describe_frame(FrameDescriptionIn(frames=payload.frames, observed_at=payload.observed_at,
+                                                   limelight_hints=ll))
     raw = described["description"].strip()
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
     try:
@@ -185,7 +202,8 @@ def ingest_frames(payload: FrameIngestIn, authorization: Optional[str] = Header(
     action = str(facts.get("visible_action", "")).strip()
     note_parts = [part for part in (observation, f"Visible action: {action}" if action and action.lower() not in {"unknown", "cannot determine from one frame"} else "") if part]
     note = " ".join(note_parts) or "The visual model returned no concise observation; review the attached frame."
-    equipment = ", ".join(objects) if objects else "Unidentified equipment or surroundings"
+    detected_labels = [str(item.get("class", "")).strip() for item in (ll or {}).get("detectors", []) if item.get("class")]
+    equipment = ", ".join(objects or detected_labels) if (objects or detected_labels) else "Unidentified equipment or surroundings"
     area = payload.area if payload.area != "Unspecified area" else (", ".join(map(str, clues)) or payload.area)
     result = add_event(ObservationIn(
         worker=payload.worker, area=area, equipment=equipment, kind="AI visual draft",
@@ -193,9 +211,32 @@ def ingest_frames(payload: FrameIngestIn, authorization: Optional[str] = Header(
     ))
     result["origin"] = f"ShiftLens camera · {payload.device_id} · AI draft; review required"
     with _db() as con:
-        con.execute("UPDATE observations SET origin=? WHERE id=?", (result["origin"], result["id"]))
+        con.execute("UPDATE observations SET origin=?, source_data_json=? WHERE id=?",
+                    (result["origin"], json.dumps({"limelight": ll}) if ll else None, result["id"]))
+        row = con.execute("SELECT * FROM observations WHERE id=?", (result["id"],)).fetchone()
+    result = _event(row)
     return {"event": result, "model": described["model"], "review_required": True,
-            "area_clues": clues, "uncertainty": facts.get("uncertainty", "Model output requires human review")}
+            "area_clues": clues, "limelight": ll,
+            "uncertainty": facts.get("uncertainty", "Model output requires human review")}
+
+
+def _limelight_summary(results: dict[str, Any]) -> dict[str, Any]:
+    """Keep a small, known subset of Limelight's CV output; never store arbitrary payloads."""
+    def selected(key: str, fields: tuple[str, ...], limit: int = 12) -> list[dict[str, Any]]:
+        values = results.get(key, [])
+        if not isinstance(values, list):
+            return []
+        return [{field: item[field] for field in fields if field in item
+                 and isinstance(item[field], (str, int, float, bool))}
+                for item in values[:limit] if isinstance(item, dict)]
+    return {
+        "pipeline_id": results.get("pID"),
+        "pipeline_type": results.get("pTYPE"),
+        "frame_index": results.get("fidx"),
+        "detectors": selected("Detector", ("class", "classID", "conf", "tx", "ty", "ta")),
+        "fiducials": selected("Fiducial", ("fID", "fam", "tx", "ty", "ta")),
+        "barcodes": selected("Barcode", ("fam", "data", "tx", "ty", "ta")),
+    }
 
 
 @router.get("/frames/{name}")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ShiftLens Raspberry Pi USB-camera edge agent.
+"""ShiftLens Raspberry Pi camera edge agent (USB/UVC or Limelight).
 
 Samples a short, in-memory frame window and posts it to the ShiftLens API for
 human-reviewed Nemotron description. Audio is never captured or transmitted.
@@ -32,6 +32,31 @@ def setting(name: str, default: str) -> str:
     return os.getenv(name, default).strip()
 
 
+def limelight_results(base_url: str) -> dict | None:
+    """Fetch the latest native Limelight CV result; tolerate device/network outages."""
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}:5807/results", timeout=(1, 2))
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list):
+            data = data[0] if data and isinstance(data[0], dict) else {}
+        if isinstance(data, dict) and isinstance(data.get("Results"), list):
+            data = data["Results"][0] if data["Results"] else {}
+        return data if isinstance(data, dict) else None
+    except (requests.RequestException, ValueError) as exc:
+        LOG.debug("Limelight results unavailable: %s", exc)
+        return None
+
+
+def area_from_fiducials(results: dict | None, tag_map: dict[str, str], fallback: str) -> str:
+    for tag in (results or {}).get("Fiducial", []):
+        if isinstance(tag, dict):
+            area = tag_map.get(str(tag.get("fID", "")))
+            if area:
+                return area
+    return fallback
+
+
 def main() -> int:
     logging.basicConfig(level=setting("SHIFTLENS_LOG_LEVEL", "INFO").upper(),
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -45,6 +70,15 @@ def main() -> int:
         return 2
 
     camera_index = int(setting("SHIFTLENS_CAMERA_INDEX", "0"))
+    camera_source = setting("SHIFTLENS_CAMERA_SOURCE", "usb").lower()
+    limelight_url = setting("SHIFTLENS_LIMELIGHT_URL", "http://limelight.local").rstrip("/")
+    try:
+        tag_map = json.loads(setting("SHIFTLENS_LIMELIGHT_TAG_MAP", "{}"))
+        if not isinstance(tag_map, dict):
+            raise ValueError("tag map must be a JSON object")
+    except ValueError as exc:
+        LOG.error("Invalid SHIFTLENS_LIMELIGHT_TAG_MAP: %s", exc)
+        return 2
     interval_s = max(5, int(setting("SHIFTLENS_ANALYZE_EVERY_SECONDS", "15")))
     sample_every_s = max(1, int(setting("SHIFTLENS_SAMPLE_EVERY_SECONDS", "1")))
     worker = setting("SHIFTLENS_WORKER", "Worker 01")
@@ -53,18 +87,28 @@ def main() -> int:
     max_width = max(320, int(setting("SHIFTLENS_FRAME_WIDTH", "640")))
     api_ingest = f"{api_url}/memory/ingest-frames"
 
-    camera = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
+    if camera_source == "usb":
+        camera = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
+        source_label = f"USB camera index {camera_index}"
+    elif camera_source == "limelight":
+        # Limelight 3A serves its MJPEG camera stream on port 5800.
+        camera = cv2.VideoCapture(f"{limelight_url}:5800", cv2.CAP_FFMPEG)
+        source_label = f"Limelight stream at {limelight_url}:5800"
+    else:
+        LOG.error("SHIFTLENS_CAMERA_SOURCE must be 'usb' or 'limelight'.")
+        return 2
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not camera.isOpened():
-        LOG.error("Could not open USB camera index %s. Check /dev/video* and the video group.", camera_index)
+        LOG.error("Could not open %s. Check device IP, stream access, and network connectivity.", source_label)
         return 3
 
     samples: deque[tuple[str, str]] = deque(maxlen=5)
     last_sample = 0.0
     last_attempt = 0.0
-    LOG.info("CAMERA ACTIVE · sampling enabled · audio disabled · device=%s", device_id)
+    latest_ll: dict | None = None
+    LOG.info("CAMERA ACTIVE · source=%s · audio disabled · device=%s", source_label, device_id)
     LOG.info("At most five JPEG frames remain in RAM; they are sent only to %s", api_ingest)
 
     try:
@@ -85,6 +129,8 @@ def main() -> int:
                     data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii")
                     timestamp = datetime.now(timezone.utc).isoformat()
                     samples.append((timestamp, data_url))
+                    if camera_source == "limelight":
+                        latest_ll = limelight_results(limelight_url)
                 last_sample = now
 
             if len(samples) == samples.maxlen and now - last_attempt >= interval_s:
@@ -95,6 +141,11 @@ def main() -> int:
                     "area": area,
                     "device_id": device_id,
                 }
+                if camera_source == "limelight":
+                    latest_ll = limelight_results(limelight_url) or latest_ll
+                    if latest_ll:
+                        payload["limelight_results"] = latest_ll
+                        payload["area"] = area_from_fiducials(latest_ll, tag_map, area)
                 last_attempt = now
                 try:
                     response = requests.post(api_ingest, json=payload,
@@ -102,8 +153,9 @@ def main() -> int:
                     response.raise_for_status()
                     result = response.json()
                     event = result.get("event", {})
-                    LOG.info("Observation draft saved · id=%s · model=%s · review required",
-                             event.get("id", "unknown"), result.get("model", "unknown"))
+                    LOG.info("Observation draft saved · id=%s · model=%s · Limelight CV=%s · review required",
+                             event.get("id", "unknown"), result.get("model", "unknown"),
+                             "attached" if payload.get("limelight_results") else "unavailable")
                     samples.clear()
                 except requests.RequestException as exc:
                     status = getattr(getattr(exc, "response", None), "status_code", None)
