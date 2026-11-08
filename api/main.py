@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .spacetime import call_reducer, query_sql
-from signals.ercot import fetch_actual_load, fetch_realtime_spp
+from signals.ercot import fetch_actual_load, fetch_realtime_spp, interval_timestamp, ERCOT_ACTUAL_LOAD_URL
 from signals.forecast import forecast_series
 from signals.demand import forecast_demand
 from signals.news_forecast import fetch_rss, score_with_nemotron, nemotron_status
@@ -301,6 +301,24 @@ def demo_price_curve():
         return historical_price_replay(24, "HB_NORTH")
     except Exception as exc:
         raise HTTPException(502, f"ERCOT historical replay unavailable: {exc}") from exc
+
+
+@app.get("/demo/demand-curve")
+def demo_demand_curve():
+    """Return published ERCOT system actual load (not a forecast)."""
+    try:
+        rows=fetch_actual_load("TOTAL")
+        for row in rows:
+            row["observed_at"]=interval_timestamp(row["oper_day"],row["hour_ending"]).isoformat()
+        if not rows:
+            raise ValueError("ERCOT returned no actual system-load observations")
+        return {"kind":"observed_actual_load","zone":"TOTAL","unit":"MW",
+            "source":"ERCOT actual load","source_url":ERCOT_ACTUAL_LOAD_URL,
+            "fetched_at":__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+            "records":rows,"forecast":False,
+            "note":"ERCOT-wide hourly actual demand, not local data-center load and not a forecast."}
+    except Exception as exc:
+        raise HTTPException(502,f"ERCOT actual system load unavailable: {exc}") from exc
 
 
 class CompareRequest(BaseModel):
